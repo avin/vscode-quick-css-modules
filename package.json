@@ -3,13 +3,14 @@
   "displayName": "Quick CSS Modules",
   "description": "Smart navigation, auto-creation, and refactoring for CSS Modules with support for SCSS, LESS, Stylus, and Vue",
   "version": "0.0.1",
-  "publisher": "your-publisher-name",
+  "publisher": "c75",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/quick-css-modules"
+    "url": "https://github.com/avin/vscode-quick-css-modules"
   },
   "engines": {
-    "vscode": "^1.107.0"
+    "vscode": "^1.30.0"
   },
   "categories": [
     "Other"
@@ -57,7 +58,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "@types/vscode": "^1.107.0",
+    "@types/vscode": "^1.30.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "eslint": "^9.39.1",
