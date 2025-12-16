@@ -1,73 +1,76 @@
 # Quick CSS Modules
 
-Удобная работа с CSS модулями в VSCode - навигация по классам и автоматическое создание.
+A VS Code extension that enhances CSS Modules workflow with smart navigation, autocomplete, and auto-creation features.
 
-## Возможности
+## Features
 
-### 1. Ctrl+Click по переменной CSS модуля
-Кликните на переменную `styles` в коде (не в строке импорта) - откроется CSS/SCSS модуль:
+### Smart Navigation
+Navigate from TypeScript/JavaScript code to CSS module files and specific class definitions:
+- **Ctrl+Click** on `styles` variable to open the CSS module file
+- **Ctrl+Click** on class names (e.g., `styles.container`) to jump directly to the class definition in the CSS file
+
 ```typescript
 import styles from './Button.module.scss';
 
-const x = styles; // Ctrl+Click на "styles" → откроется Button.module.scss
+// Ctrl+Click on "styles" → opens Button.module.scss
+const x = styles;
+
+// Ctrl+Click on "container" → jumps to .container in CSS
+<div className={styles.container}>
 ```
 
-### 2. Ctrl+Click по классу
-Кликните на свойство CSS модуля - переход к классу в файле:
+### Auto-create Missing Classes
+When you Ctrl+Click on a class that doesn't exist, the extension automatically creates it in the CSS file with a basic template:
 ```typescript
-<div className={styles.container}>  // Ctrl+Click на "container" → переход к .container
+// Ctrl+Click on non-existent class
+<div className={styles.newClass}>
 ```
-
-### 3. Автосоздание классов
-Если класс не существует - он будет создан автоматически:
-```typescript
-<div className={styles.newClass}>  // Ctrl+Click создаст .newClass { } в CSS файле
-```
-
-### 4. Автодополнение классов (новое!)
-Начните писать `styles.` - увидите список всех доступных CSS классов:
-```typescript
-styles.  // ← появится список: container, title, button, ...
-```
-При выборе класса также показывается его содержимое в документации.
-
-### 5. Hover для просмотра CSS
-Наведите на `styles.className` с зажатым **Ctrl** - увидите содержимое класса из CSS файла:
-```typescript
-<div className={styles.container}>  // Ctrl+Hover → показывает .container { ... }
-```
-
-### 6. Фильтрация .d.ts файлов
-Используйте **Ctrl+Alt+D** вместо F12 для перехода, который автоматически отфильтрует `.d.ts` файлы и перейдет сразу в CSS модуль.
-
-## Использование
-
-### Основной способ (работает всегда):
-- **Ctrl+Click** (F12) на `styles.className` в коде
-- **Ctrl+Click** (F12) на `styles` в использовании (не в импорте)
-
-### Альтернативный способ (фильтрует .d.ts):
-- **Ctrl+Alt+D** на любом месте CSS модуля - автоматически откроет CSS файл вместо `.d.ts`
-
-### Команды:
-- `Quick CSS Modules: Go to CSS Module` - явный переход к CSS модулю
-- `Quick CSS Modules: Go to Definition (CSS Modules Aware)` - переход с фильтрацией .d.ts
-
-## Настройки
-
-```json
-{
-  // Фильтровать .d.ts файлы при навигации (по умолчанию: true)
-  "quick-css-modules.filterDeclarationFiles": true,
+Creates in CSS:
+```css
+.newClass {
   
-  // Показать подсказку об переопределении F12 (по умолчанию: false)
-  "quick-css-modules.overrideGoToDefinition": false
 }
 ```
 
-## Переопределение F12 (опционально)
+### IntelliSense Autocompletion
+Get autocomplete suggestions when typing `styles.` - all available CSS classes appear in the suggestion list with their full content in the documentation preview.
 
-Если хотите, чтобы **F12** всегда фильтровал `.d.ts` файлы, добавьте в `keybindings.json`:
+```typescript
+styles.  // ← IntelliSense shows: container, title, button, ...
+```
+
+### CSS Preview on Hover
+Hover over CSS module properties with **Ctrl** held down to preview the class content without opening the file:
+```typescript
+<div className={styles.container}>  // Ctrl+Hover shows CSS content
+```
+
+### Filter Declaration Files
+Use **Ctrl+Alt+D** for navigation that skips TypeScript `.d.ts` declaration files and goes directly to the CSS module file.
+
+## How to Use
+
+### Navigation Shortcuts
+- **F12** or **Ctrl+Click** - Standard "Go to Definition" (works on both `styles` variable and class names)
+- **Ctrl+Alt+D** - Enhanced navigation that filters out `.d.ts` files (recommended for CSS modules)
+
+### Available Commands
+Access these commands via Command Palette (Ctrl+Shift+P):
+- `Quick CSS Modules: Go to CSS Module` - Navigate to CSS module file
+- `Quick CSS Modules: Go to Definition (CSS Modules Aware)` - Navigate with automatic `.d.ts` filtering
+
+## Configuration
+
+### Extension Settings
+
+This extension contributes the following settings:
+
+- `quick-css-modules.filterDeclarationFiles` - Enable/disable filtering of `.d.ts` files during navigation (default: `true`)
+- `quick-css-modules.overrideGoToDefinition` - Show hint about F12 override (default: `false`)
+
+### Custom Keybindings
+
+You can override the default F12 behavior to always filter `.d.ts` files. Add this to your `keybindings.json`:
 
 ```json
 {
@@ -77,38 +80,40 @@ styles.  // ← появится список: container, title, button, ...
 }
 ```
 
-## Поддерживаемые форматы
+## Supported File Types
 
+### CSS Module Files
 - `*.module.css`
 - `*.module.scss`
-- `*.module.sass` (добавить легко)
+- `*.module.sass`
 
-## Поддерживаемые языки
+### Source Files
+- TypeScript (`.ts`, `.tsx`)
+- JavaScript (`.js`, `.jsx`)
 
-- TypeScript (`.ts`)
-- TypeScript React (`.tsx`)
-- JavaScript (`.js`)
-- JavaScript React (`.jsx`)
+## Known Issues
 
-## Известные ограничения
+- **Import line navigation**: When using Ctrl+Click directly on the import statement, TypeScript may open the `.d.ts` declaration file instead of the CSS module. 
+  - **Workaround**: Use Ctrl+Alt+D, or click on `styles` in the actual code (not in the import line)
+  
+- **Class detection**: The extension uses text-based search for CSS classes (`.className` pattern). This approach works reliably with most CSS/SCSS features including nested selectors, mixins, and variables.
 
-- При Ctrl+Click **в строке импорта** TypeScript может показать `.d.ts` файл первым
-  - **Решение**: используйте Ctrl+Alt+D или кликайте на `styles` в месте использования
-- Поиск классов работает через простой текстовый поиск `.className`
-  - Это работает с вложенными селекторами, миксинами и т.д.
+## Requirements
 
-## Требования
-
-- VS Code 1.107.0 или выше
+VS Code version 1.107.0 or higher
 
 ## Release Notes
 
-### 0.0.1
+### 0.0.1 - Initial Release
 
-Первый релиз:
-- Навигация по CSS модулям
-- Автосоздание классов
-- Автодополнение CSS классов (IntelliSense)
-- Hover для просмотра CSS классов (Ctrl+наведение)
-- Фильтрация .d.ts файлов
-- Альтернативный кейбиндинг Ctrl+Alt+D
+Features included:
+- Smart navigation to CSS modules with Ctrl+Click
+- Automatic class creation for non-existent classes
+- IntelliSense autocompletion for CSS class names
+- CSS preview on hover (Ctrl+Hover)
+- Declaration file filtering
+- Enhanced navigation keybinding (Ctrl+Alt+D)
+
+---
+
+**Enjoy!**

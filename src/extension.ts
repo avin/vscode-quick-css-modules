@@ -10,7 +10,7 @@ interface CSSModuleImport {
 export function activate(context: vscode.ExtensionContext) {
 	console.log('CSS Modules extension is now active!');
 
-	// Регистрируем Definition Provider для TypeScript, JavaScript, TSX, JSX
+	// Register Definition Provider for TypeScript, JavaScript, TSX, JSX
 	const selector = [
 		{ scheme: 'file', language: 'typescript' },
 		{ scheme: 'file', language: 'javascript' },
@@ -25,20 +25,20 @@ export function activate(context: vscode.ExtensionContext) {
 		provider
 	);
 
-	// Регистрируем Hover Provider для показа CSS классов
+	// Register Hover Provider to show CSS classes
 	const hoverProvider = vscode.languages.registerHoverProvider(
 		selector,
 		new CSSModuleHoverProvider()
 	);
 
-	// Регистрируем Completion Provider для автодополнения классов
+	// Register Completion Provider for class autocompletion
 	const completionProvider = vscode.languages.registerCompletionItemProvider(
 		selector,
 		new CSSModuleCompletionProvider(),
-		'.' // Триггер - точка
+		'.' // Trigger character - dot
 	);
 
-	// Регистрируем команду для явного перехода к CSS модулю
+	// Register command for explicit navigation to CSS module
 	const goToCSSModuleCommand = vscode.commands.registerCommand('quick-css-modules.goToCSSModule', async () => {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
@@ -62,16 +62,16 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	// Добавляем настройку для фильтрации .d.ts файлов
+	// Add setting for filtering .d.ts files
 	const config = vscode.workspace.getConfiguration('quick-css-modules');
 	const filterDTS = config.get<boolean>('filterDeclarationFiles', true);
 
 	if (filterDTS) {
-		// Перехватываем клики и фильтруем результаты
+		// Intercept clicks and filter results
 		setupDefinitionFilter(context);
 	}
 
-	// Проверяем, нужно ли переопределить F12
+	// Check if we need to override F12
 	const overrideF12 = config.get<boolean>('overrideGoToDefinition', false);
 	if (overrideF12) {
 		vscode.window.showInformationMessage(
@@ -84,10 +84,10 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function setupDefinitionFilter(context: vscode.ExtensionContext) {
-	// Перехватываем команду editor.action.revealDefinition
+	// Intercept editor.action.revealDefinition command
 	const originalCommand = 'editor.action.revealDefinition';
 	
-	// Регистрируем обработчик для текущего редактора
+	// Register handler for current editor
 	context.subscriptions.push(
 		vscode.commands.registerCommand('quick-css-modules.revealDefinition', async () => {
 			const editor = vscode.window.activeTextEditor;
@@ -98,7 +98,7 @@ function setupDefinitionFilter(context: vscode.ExtensionContext) {
 			const position = editor.selection.active;
 			const document = editor.document;
 			
-			// Проверяем, является ли это CSS модулем
+			// Check if this is a CSS module
 			const wordRange = document.getWordRangeAtPosition(position);
 			if (!wordRange) {
 				return vscode.commands.executeCommand(originalCommand);
@@ -108,12 +108,12 @@ function setupDefinitionFilter(context: vscode.ExtensionContext) {
 			const helper = new CSSModuleDefinitionProvider();
 			const cssImports = helper['findCSSModuleImports'](document);
 			
-			// Если это переменная CSS модуля или её свойство - используем наш провайдер
+			// If this is a CSS module variable or its property - use our provider
 			const isCSSModule = cssImports.some(imp => imp.variableName === word) ||
 				isCSSModuleProperty(document, position, word, cssImports);
 			
 			if (isCSSModule) {
-				// Получаем все определения
+				// Get all definitions
 				const definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
 					'vscode.executeDefinitionProvider',
 					document.uri,
@@ -121,16 +121,16 @@ function setupDefinitionFilter(context: vscode.ExtensionContext) {
 				);
 				
 				if (definitions && definitions.length > 0) {
-					// Фильтруем .d.ts файлы
+					// Filter .d.ts files
 					const filtered = definitions.filter(def => {
 						if (!def) {
 							return false;
 						}
-						// Проверяем Location
+						// Check Location
 						if ('uri' in def && def.uri) {
 							return !def.uri.fsPath.endsWith('.d.ts');
 						}
-						// Проверяем LocationLink
+						// Check LocationLink
 						if ('targetUri' in def && def.targetUri) {
 							return !def.targetUri.fsPath.endsWith('.d.ts');
 						}
@@ -138,7 +138,7 @@ function setupDefinitionFilter(context: vscode.ExtensionContext) {
 					});
 					
 					if (filtered.length > 0) {
-						// Переходим к первому отфильтрованному результату
+						// Navigate to first filtered result
 						const target = filtered[0];
 						
 						let uri: vscode.Uri;
@@ -160,7 +160,7 @@ function setupDefinitionFilter(context: vscode.ExtensionContext) {
 				}
 			}
 			
-			// В остальных случаях - вызываем стандартную команду
+			// In other cases - call standard command
 			return vscode.commands.executeCommand(originalCommand);
 		})
 	);
@@ -179,7 +179,7 @@ function isCSSModuleProperty(
 		return false;
 	}
 
-	// Проверяем objectName.property
+	// Check objectName.property
 	const beforeWord = line.substring(0, wordRange.start.character);
 	const dotMatch = beforeWord.match(/(\w+)\.$/);
 	
@@ -187,7 +187,7 @@ function isCSSModuleProperty(
 		return cssImports.some(imp => imp.variableName === dotMatch[1]);
 	}
 
-	// Проверяем property после objectName
+	// Check property after objectName
 	const afterWord = line.substring(wordRange.end.character);
 	if (afterWord.startsWith('.')) {
 		return cssImports.some(imp => imp.variableName === word);
@@ -211,32 +211,32 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 
 		const word = document.getText(wordRange);
 
-		// Ищем все импорты CSS модулей в документе
+		// Find all CSS module imports in the document
 		const cssModuleImports = this.findCSSModuleImports(document);
 		
-		// Если нет импортов CSS модулей - не обрабатываем
+		// If no CSS module imports - don't process
 		if (cssModuleImports.length === 0) {
 			return undefined;
 		}
 		
-		// Проверяем, не кликнули ли на свойство объекта (например, styles.className)
+		// Check if clicked on object property (e.g., styles.className)
 		const propertyMatch = this.getPropertyAccess(document, position, word);
 		if (propertyMatch) {
 			const { objectName, propertyName } = propertyMatch;
 			
-			// Ищем соответствующий импорт
+			// Find corresponding import
 			const cssImport = cssModuleImports.find(imp => imp.variableName === objectName);
 			if (cssImport) {
-				// Ищем или создаем класс в CSS модуле
+				// Find or create class in CSS module
 				return this.findOrCreateCSSClass(document, cssImport.filePath, propertyName);
 			}
 		}
 
-		// Проверяем, не кликнули ли на переменную CSS модуля (например, "styles")
-		// Это должно быть после проверки свойств, чтобы styles.className обрабатывался правильно
+		// Check if clicked on CSS module variable (e.g., "styles")
+		// This should be after property check to handle styles.className correctly
 		const cssImport = cssModuleImports.find(imp => imp.variableName === word);
 		if (cssImport) {
-			// Клик по переменной импорта - открываем файл модуля
+			// Click on import variable - open module file
 			return this.openCSSModuleFile(document, cssImport.filePath);
 		}
 
@@ -247,7 +247,7 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 		const imports: CSSModuleImport[] = [];
 		const text = document.getText();
 		
-		// Regex для поиска импортов вида: import styles from './file.module.scss'
+		// Regex to find imports like: import styles from './file.module.scss'
 		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
 		
 		let match;
@@ -255,11 +255,11 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 			const variableName = match[1];
 			const relativePath = match[2];
 			
-			// Вычисляем абсолютный путь к файлу
+			// Calculate absolute file path
 			const documentDir = path.dirname(document.uri.fsPath);
 			const absolutePath = path.resolve(documentDir, relativePath);
 			
-			// Находим позицию переменной в документе
+			// Find variable position in document
 			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
 			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
 			
@@ -289,14 +289,14 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 		const dotMatch = beforeWord.match(/(\w+)\.$/);
 		
 		if (dotMatch) {
-			// Кликнули на propertyName в objectName.propertyName
+			// Clicked on propertyName in objectName.propertyName
 			return {
 				objectName: dotMatch[1],
 				propertyName: word
 			};
 		}
 
-		// Проверяем, не кликнули ли на objectName в objectName.propertyName
+		// Check if clicked on objectName in objectName.propertyName
 		const afterWord = line.substring(wordRange.end.character);
 		if (afterWord.startsWith('.')) {
 			const propertyMatch = afterWord.match(/^\.(\w+)/);
@@ -332,12 +332,12 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 		try {
 			const uri = vscode.Uri.file(cssFilePath);
 			
-			// Читаем содержимое CSS файла
+			// Read CSS file content
 			let cssDocument: vscode.TextDocument;
 			try {
 				cssDocument = await vscode.workspace.openTextDocument(uri);
 			} catch (error) {
-				// Файл не существует - создаем его
+				// File doesn't exist - create it
 				const workspaceEdit = new vscode.WorkspaceEdit();
 				workspaceEdit.createFile(uri, { ignoreIfExists: true });
 				await vscode.workspace.applyEdit(workspaceEdit);
@@ -346,30 +346,30 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 
 			const cssContent = cssDocument.getText();
 			
-			// Ищем класс в CSS файле (простой поиск подстроки .className)
+			// Find class in CSS file (simple substring search for .className)
 			const classPattern = `.${className}`;
 			const classIndex = cssContent.indexOf(classPattern);
 			
 			if (classIndex !== -1) {
-				// Класс найден - переходим к нему
+				// Class found - navigate to it
 				const position = cssDocument.positionAt(classIndex);
 				return new vscode.Location(uri, position);
 			} else {
-				// Класс не найден - создаем его
+				// Class not found - create it
 				const newClass = `\n.${className} {\n\t\n}\n`;
 				const workspaceEdit = new vscode.WorkspaceEdit();
 				
-				// Добавляем класс в конец файла
+				// Add class to end of file
 				const lastLine = cssDocument.lineCount;
 				const insertPosition = new vscode.Position(lastLine, 0);
 				workspaceEdit.insert(uri, insertPosition, newClass);
 				
 				await vscode.workspace.applyEdit(workspaceEdit);
 				
-				// Пересохраняем документ
+				// Save document
 				await cssDocument.save();
 				
-				// Возвращаем позицию нового класса
+				// Return position of new class
 				const newPosition = new vscode.Position(lastLine + 1, 0);
 				return new vscode.Location(uri, newPosition);
 			}
@@ -394,13 +394,13 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 
 		const word = document.getText(wordRange);
 		
-		// Ищем все импорты CSS модулей
+		// Find all CSS module imports
 		const cssImports = this.findCSSModuleImports(document);
 		if (cssImports.length === 0) {
 			return undefined;
 		}
 
-		// Проверяем, является ли это свойством CSS модуля (styles.className)
+		// Check if this is CSS module property (styles.className)
 		const propertyMatch = this.getPropertyAccess(document, position, word);
 		if (!propertyMatch) {
 			return undefined;
@@ -408,19 +408,19 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 
 		const { objectName, propertyName } = propertyMatch;
 		
-		// Ищем соответствующий импорт
+		// Find corresponding import
 		const cssImport = cssImports.find(imp => imp.variableName === objectName);
 		if (!cssImport) {
 			return undefined;
 		}
 
-		// Читаем CSS файл и ищем класс
+		// Read CSS file and find class
 		try {
 			const uri = vscode.Uri.file(cssImport.filePath);
 			const cssDocument = await vscode.workspace.openTextDocument(uri);
 			const cssContent = cssDocument.getText();
 			
-			// Ищем класс в CSS файле
+			// Find class in CSS file
 			const classPattern = `.${propertyName}`;
 			const classIndex = cssContent.indexOf(classPattern);
 			
@@ -430,7 +430,7 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 				);
 			}
 
-			// Извлекаем содержимое класса
+			// Extract class content
 			const classContent = this.extractClassContent(cssContent, classIndex);
 			
 			const markdown = new vscode.MarkdownString();
@@ -445,16 +445,16 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 	}
 
 	private extractClassContent(cssContent: string, classIndex: number): string {
-		// Находим начало класса
+		// Find start of class
 		let start = classIndex;
 		
-		// Ищем открывающую скобку
+		// Find opening brace
 		const openBraceIndex = cssContent.indexOf('{', start);
 		if (openBraceIndex === -1) {
 			return cssContent.substring(start, Math.min(start + 100, cssContent.length));
 		}
 
-		// Ищем закрывающую скобку (учитываем вложенность)
+		// Find closing brace (considering nesting)
 		let depth = 0;
 		let closeBraceIndex = openBraceIndex;
 		
@@ -470,7 +470,7 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 			}
 		}
 
-		// Извлекаем весь класс
+		// Extract entire class
 		const classContent = cssContent.substring(start, closeBraceIndex + 1);
 		
 		return classContent;
@@ -550,7 +550,7 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 		const line = document.lineAt(position.line).text;
 		const textBeforeCursor = line.substring(0, position.character);
 		
-		// Ищем паттерн "variableName." или "variableName.partialText"
+		// Find pattern "variableName." or "variableName.partialText"
 		const match = textBeforeCursor.match(/(\w+)\.(\w*)$/);
 		if (!match) {
 			return undefined;
@@ -558,7 +558,7 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 
 		const variableName = match[1];
 
-		// Ищем импорты CSS модулей
+		// Find CSS module imports
 		const cssImports = this.findCSSModuleImports(document);
 		const cssImport = cssImports.find(imp => imp.variableName === variableName);
 		
@@ -566,7 +566,7 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 			return undefined;
 		}
 
-		// Читаем CSS файл и извлекаем все классы
+		// Read CSS file and extract all classes
 		try {
 			const uri = vscode.Uri.file(cssImport.filePath);
 			const cssDocument = await vscode.workspace.openTextDocument(uri);
@@ -574,12 +574,12 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 			
 			const classNames = this.extractClassNames(cssContent);
 			
-			// Создаем completion items
+			// Create completion items
 			return classNames.map(className => {
 				const item = new vscode.CompletionItem(className, vscode.CompletionItemKind.Property);
 				item.detail = `CSS Module class from ${path.basename(cssImport.filePath)}`;
 				
-				// Добавляем документацию с превью класса
+				// Add documentation with class preview
 				const classContent = this.getClassPreview(cssContent, className);
 				if (classContent) {
 					item.documentation = new vscode.MarkdownString();
@@ -597,14 +597,14 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 	private extractClassNames(cssContent: string): string[] {
 		const classNames = new Set<string>();
 		
-		// Regex для поиска классов: .className
-		// Поддерживает простые классы и вложенные
+		// Regex to find classes: .className
+		// Supports simple and nested classes
 		const classRegex = /\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
 		
 		let match;
 		while ((match = classRegex.exec(cssContent)) !== null) {
 			const className = match[1];
-			// Исключаем псевдоклассы и псевдоэлементы
+			// Exclude pseudo-classes and pseudo-elements
 			if (!className.startsWith(':') && !className.startsWith('::')) {
 				classNames.add(className);
 			}
@@ -621,13 +621,13 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 			return undefined;
 		}
 
-		// Ищем открывающую скобку
+		// Find opening brace
 		const openBraceIndex = cssContent.indexOf('{', classIndex);
 		if (openBraceIndex === -1) {
 			return undefined;
 		}
 
-		// Ищем закрывающую скобку
+		// Find closing brace
 		let depth = 0;
 		let closeBraceIndex = openBraceIndex;
 		

@@ -9,25 +9,25 @@ suite('CSS Modules Extension Test Suite', () => {
 	const testFilesDir = path.join(__dirname, '..', '..', 'test-files');
 	
 	setup(async () => {
-		// Активируем расширение
+		// Activate extension
 		const ext = vscode.extensions.getExtension('undefined_publisher.quick-css-modules');
 		if (ext && !ext.isActive) {
 			await ext.activate();
 		}
 		
-		// Создаем тестовые файлы если их нет
+		// Create test files if they don't exist
 		if (!fs.existsSync(testFilesDir)) {
 			fs.mkdirSync(testFilesDir, { recursive: true });
 		}
 		
-		// Создаем тестовый CSS модуль
+		// Create test CSS module
 		const cssPath = path.join(testFilesDir, 'Test.module.scss');
 		const cssContent = `.existing {\n\tcolor: red;\n}\n`;
 		if (!fs.existsSync(cssPath)) {
 			fs.writeFileSync(cssPath, cssContent, 'utf8');
 		}
 		
-		// Создаем тестовый TypeScript файл
+		// Create test TypeScript file
 		const tsPath = path.join(testFilesDir, 'Test.tsx');
 		const tsContent = `import React from 'react';\nimport styles from './Test.module.scss';\n\nexport const Test = () => {\n\treturn <div className={styles.existing}>Test</div>;\n};\n`;
 		if (!fs.existsSync(tsPath)) {
@@ -39,7 +39,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		const tsPath = path.join(testFilesDir, 'Test.tsx');
 		const doc = await vscode.workspace.openTextDocument(tsPath);
 		
-		// Проверяем что документ открылся
+		// Verify document opened
 		assert.ok(doc);
 		
 		const text = doc.getText();
@@ -49,11 +49,11 @@ suite('CSS Modules Extension Test Suite', () => {
 	test('Should provide definition for CSS module variable in usage', async () => {
 		const tsPath = path.join(testFilesDir, 'TestUsage.tsx');
 		
-		// Создаем CSS модуль
+		// Create CSS module
 		const cssPath = path.join(testFilesDir, 'TestUsage.module.scss');
 		fs.writeFileSync(cssPath, '.test { color: blue; }\n', 'utf8');
 		
-		// Создаем TS файл где styles используется БЕЗ точки (отдельно)
+		// Create TS file where styles is used WITHOUT dot (standalone)
 		const tsContent = `import React from 'react';\nimport styles from './TestUsage.module.scss';\n\nconst x = styles;\nexport const Test = () => <div>{x}</div>;\n`;
 		fs.writeFileSync(tsPath, tsContent, 'utf8');
 		
@@ -62,12 +62,12 @@ suite('CSS Modules Extension Test Suite', () => {
 		
 		await new Promise(resolve => setTimeout(resolve, 500));
 		
-		// Ищем позицию слова "styles" в строке "const x = styles"
+		// Find position of word "styles" in line "const x = styles"
 		const text = doc.getText();
 		const usageIndex = text.indexOf('const x = styles') + 'const x = '.length;
 		const position = doc.positionAt(usageIndex);
 		
-		// Вызываем команду Go to Definition
+		// Call Go to Definition command
 		const definitions = await vscode.commands.executeCommand<vscode.Location[]>(
 			'vscode.executeDefinitionProvider',
 			doc.uri,
@@ -77,7 +77,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		assert.ok(definitions, 'Should return definitions');
 		assert.ok(definitions.length > 0, 'Should have at least one definition');
 		
-		// Проверяем что хотя бы одна дефиниция указывает на наш CSS модуль
+		// Check that at least one definition points to our CSS module
 		const cssDefinition = definitions.find(def => 
 			def && def.uri && def.uri.fsPath.endsWith('TestUsage.module.scss')
 		);
@@ -120,7 +120,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		
 		assert.ok(cssDefinition, 'Should point to CSS module');
 		
-		// Проверяем что позиция указывает на класс
+		// Check that position points to the class
 		if (cssDefinition) {
 			const cssDoc = await vscode.workspace.openTextDocument(cssDefinition.uri);
 			const cssText = cssDoc.getText();
@@ -137,10 +137,10 @@ suite('CSS Modules Extension Test Suite', () => {
 		const cssPath = path.join(testFilesDir, 'TestCreate.module.scss');
 		const tsPath = path.join(testFilesDir, 'TestCreate.tsx');
 		
-		// Создаем пустой CSS модуль
+		// Create empty CSS module
 		fs.writeFileSync(cssPath, '', 'utf8');
 		
-		// Создаем TS файл с несуществующим классом
+		// Create TS file with non-existent class
 		const tsContent = `import React from 'react';\nimport styles from './TestCreate.module.scss';\n\nexport const Test = () => {\n\treturn <div className={styles.newClass}>Test</div>;\n};\n`;
 		fs.writeFileSync(tsPath, tsContent, 'utf8');
 		
@@ -161,7 +161,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		
 		assert.ok(definitions, 'Should return definitions');
 		
-		// Проверяем что класс был создан в CSS файле
+		// Check that class was created in CSS file
 		await new Promise(resolve => setTimeout(resolve, 500));
 		
 		const cssContent = fs.readFileSync(cssPath, 'utf8');
@@ -187,7 +187,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		const classNameIndex = text.indexOf('styles.existing') + 'styles.'.length;
 		const position = doc.positionAt(classNameIndex);
 		
-		// Вызываем Hover Provider
+		// Call Hover Provider
 		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
 			'vscode.executeHoverProvider',
 			doc.uri,
@@ -197,7 +197,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		assert.ok(hovers, 'Should return hovers');
 		assert.ok(hovers.length > 0, 'Should have at least one hover');
 		
-		// Проверяем что хотя бы один hover содержит CSS код
+		// Check that at least one hover contains CSS code
 		const cssHover = hovers.find(hover => {
 			const contents = hover.contents;
 			return contents.some(content => {
@@ -216,12 +216,12 @@ suite('CSS Modules Extension Test Suite', () => {
 		
 		await new Promise(resolve => setTimeout(resolve, 500));
 		
-		// Ищем позицию после "styles."
+		// Find position after "styles."
 		const text = doc.getText();
 		const stylesDotIndex = text.indexOf('styles.existing');
 		const position = doc.positionAt(stylesDotIndex + 'styles.'.length);
 		
-		// Вызываем Completion Provider
+		// Call Completion Provider
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
 			doc.uri,
@@ -231,7 +231,7 @@ suite('CSS Modules Extension Test Suite', () => {
 		assert.ok(completions, 'Should return completions');
 		assert.ok(completions.items.length > 0, 'Should have completion items');
 		
-		// Проверяем что есть класс "existing"
+		// Check that class "existing" is present
 		const labels = completions.items.map(item => 
 			typeof item.label === 'string' ? item.label : item.label.label
 		);
