@@ -25,6 +25,12 @@ export function activate(context: vscode.ExtensionContext) {
 		provider
 	);
 
+	// Регистрируем Hover Provider для показа CSS классов
+	const hoverProvider = vscode.languages.registerHoverProvider(
+		selector,
+		new CSSModuleHoverProvider()
+	);
+
 	// Регистрируем команду для явного перехода к CSS модулю
 	const goToCSSModuleCommand = vscode.commands.registerCommand('quick-css-modules.goToCSSModule', async () => {
 		const editor = vscode.window.activeTextEditor;
@@ -67,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 	}
 
-	context.subscriptions.push(definitionProvider, goToCSSModuleCommand);
+	context.subscriptions.push(definitionProvider, hoverProvider, goToCSSModuleCommand);
 }
 
 function setupDefinitionFilter(context: vscode.ExtensionContext) {
@@ -101,23 +107,46 @@ function setupDefinitionFilter(context: vscode.ExtensionContext) {
 			
 			if (isCSSModule) {
 				// Получаем все определения
-				const definitions = await vscode.commands.executeCommand<vscode.Location[]>(
+				const definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
 					'vscode.executeDefinitionProvider',
 					document.uri,
 					position
 				);
 				
 				if (definitions && definitions.length > 0) {
-					// Фильтруем .d.ts файлы (проверяем что def и def.uri существуют)
-					const filtered = definitions.filter(def => 
-						def && def.uri && !def.uri.fsPath.endsWith('.d.ts')
-					);
+					// Фильтруем .d.ts файлы
+					const filtered = definitions.filter(def => {
+						if (!def) {
+							return false;
+						}
+						// Проверяем Location
+						if ('uri' in def && def.uri) {
+							return !def.uri.fsPath.endsWith('.d.ts');
+						}
+						// Проверяем LocationLink
+						if ('targetUri' in def && def.targetUri) {
+							return !def.targetUri.fsPath.endsWith('.d.ts');
+						}
+						return false;
+					});
 					
 					if (filtered.length > 0) {
 						// Переходим к первому отфильтрованному результату
 						const target = filtered[0];
-						await vscode.window.showTextDocument(target.uri, {
-							selection: target.range
+						
+						let uri: vscode.Uri;
+						let range: vscode.Range;
+						
+						if ('targetUri' in target) {
+							uri = target.targetUri;
+							range = target.targetRange;
+						} else {
+							uri = target.uri;
+							range = target.range;
+						}
+						
+						await vscode.window.showTextDocument(uri, {
+							selection: range
 						});
 						return;
 					}
@@ -342,5 +371,164 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 			vscode.window.showErrorMessage(`Failed to process CSS class: ${error}`);
 			return undefined;
 		}
+	}
+}
+
+class CSSModuleHoverProvider implements vscode.HoverProvider {
+	async provideHover(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken
+	): Promise<vscode.Hover | undefined> {
+		const wordRange = document.getWordRangeAtPosition(position);
+		if (!wordRange) {
+			return undefined;
+		}
+
+		const word = document.getText(wordRange);
+		
+		// Ищем все импорты CSS модулей
+		const cssImports = this.findCSSModuleImports(document);
+		if (cssImports.length === 0) {
+			return undefined;
+		}
+
+		// Проверяем, является ли это свойством CSS модуля (styles.className)
+		const propertyMatch = this.getPropertyAccess(document, position, word);
+		if (!propertyMatch) {
+			return undefined;
+		}
+
+		const { objectName, propertyName } = propertyMatch;
+		
+		// Ищем соответствующий импорт
+		const cssImport = cssImports.find(imp => imp.variableName === objectName);
+		if (!cssImport) {
+			return undefined;
+		}
+
+		// Читаем CSS файл и ищем класс
+		try {
+			const uri = vscode.Uri.file(cssImport.filePath);
+			const cssDocument = await vscode.workspace.openTextDocument(uri);
+			const cssContent = cssDocument.getText();
+			
+			// Ищем класс в CSS файле
+			const classPattern = `.${propertyName}`;
+			const classIndex = cssContent.indexOf(classPattern);
+			
+			if (classIndex === -1) {
+				return new vscode.Hover(
+					new vscode.MarkdownString(`**CSS Module Class**\n\nClass \`.${propertyName}\` not found. Click to create.`)
+				);
+			}
+
+			// Извлекаем содержимое класса
+			const classContent = this.extractClassContent(cssContent, classIndex);
+			
+			const markdown = new vscode.MarkdownString();
+			markdown.appendCodeblock(classContent, 'scss');
+			markdown.appendText(`\n\nFrom: ${path.basename(cssImport.filePath)}`);
+			
+			return new vscode.Hover(markdown);
+		} catch (error) {
+			console.error('Error reading CSS file:', error);
+			return undefined;
+		}
+	}
+
+	private extractClassContent(cssContent: string, classIndex: number): string {
+		// Находим начало класса
+		let start = classIndex;
+		
+		// Ищем открывающую скобку
+		const openBraceIndex = cssContent.indexOf('{', start);
+		if (openBraceIndex === -1) {
+			return cssContent.substring(start, Math.min(start + 100, cssContent.length));
+		}
+
+		// Ищем закрывающую скобку (учитываем вложенность)
+		let depth = 0;
+		let closeBraceIndex = openBraceIndex;
+		
+		for (let i = openBraceIndex; i < cssContent.length; i++) {
+			if (cssContent[i] === '{') {
+				depth++;
+			} else if (cssContent[i] === '}') {
+				depth--;
+				if (depth === 0) {
+					closeBraceIndex = i;
+					break;
+				}
+			}
+		}
+
+		// Извлекаем весь класс
+		const classContent = cssContent.substring(start, closeBraceIndex + 1);
+		
+		return classContent;
+	}
+
+	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+		const imports: CSSModuleImport[] = [];
+		const text = document.getText();
+		
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
+		
+		let match;
+		while ((match = importRegex.exec(text)) !== null) {
+			const variableName = match[1];
+			const relativePath = match[2];
+			
+			const documentDir = path.dirname(document.uri.fsPath);
+			const absolutePath = path.resolve(documentDir, relativePath);
+			
+			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
+			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
+			
+			imports.push({
+				variableName,
+				filePath: absolutePath,
+				range: new vscode.Range(startPos, endPos)
+			});
+		}
+		
+		return imports;
+	}
+
+	private getPropertyAccess(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		word: string
+	): { objectName: string; propertyName: string } | undefined {
+		const line = document.lineAt(position.line).text;
+		const wordRange = document.getWordRangeAtPosition(position);
+		
+		if (!wordRange) {
+			return undefined;
+		}
+
+		const beforeWord = line.substring(0, wordRange.start.character);
+		const dotMatch = beforeWord.match(/(\w+)\.$/);
+		
+		if (dotMatch) {
+			return {
+				objectName: dotMatch[1],
+				propertyName: word
+			};
+		}
+
+		const afterWord = line.substring(wordRange.end.character);
+		if (afterWord.startsWith('.')) {
+			const propertyMatch = afterWord.match(/^\.(\w+)/);
+			if (propertyMatch) {
+				return {
+					objectName: word,
+					propertyName: propertyMatch[1]
+				};
+			}
+		}
+
+		return undefined;
 	}
 }

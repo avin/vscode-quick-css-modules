@@ -175,4 +175,37 @@ suite('CSS Modules Extension Test Suite', () => {
 			fs.unlinkSync(tsPath);
 		}
 	});
+
+	test('Should show hover with CSS class content', async () => {
+		const tsPath = path.join(testFilesDir, 'Test.tsx');
+		const doc = await vscode.workspace.openTextDocument(tsPath);
+		await vscode.window.showTextDocument(doc);
+		
+		await new Promise(resolve => setTimeout(resolve, 500));
+		
+		const text = doc.getText();
+		const classNameIndex = text.indexOf('styles.existing') + 'styles.'.length;
+		const position = doc.positionAt(classNameIndex);
+		
+		// Вызываем Hover Provider
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			doc.uri,
+			position
+		);
+		
+		assert.ok(hovers, 'Should return hovers');
+		assert.ok(hovers.length > 0, 'Should have at least one hover');
+		
+		// Проверяем что хотя бы один hover содержит CSS код
+		const cssHover = hovers.find(hover => {
+			const contents = hover.contents;
+			return contents.some(content => {
+				const text = typeof content === 'string' ? content : content.value;
+				return text.includes('.existing') && text.includes('color: red');
+			});
+		});
+		
+		assert.ok(cssHover, 'Should have hover with CSS class content');
+	});
 });
