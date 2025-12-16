@@ -24,13 +24,20 @@ const x = styles; // Ctrl+Click на "styles" → откроется Button.modu
 <div className={styles.newClass}>  // Ctrl+Click создаст .newClass { } в CSS файле
 ```
 
-### 4. Hover для просмотра CSS (новое!)
+### 4. Автодополнение классов (новое!)
+Начните писать `styles.` - увидите список всех доступных CSS классов:
+```typescript
+styles.  // ← появится список: container, title, button, ...
+```
+При выборе класса также показывается его содержимое в документации.
+
+### 5. Hover для просмотра CSS
 Наведите на `styles.className` с зажатым **Ctrl** - увидите содержимое класса из CSS файла:
 ```typescript
 <div className={styles.container}>  // Ctrl+Hover → показывает .container { ... }
 ```
 
-### 5. Фильтрация .d.ts файлов
+### 6. Фильтрация .d.ts файлов
 Используйте **Ctrl+Alt+D** вместо F12 для перехода, который автоматически отфильтрует `.d.ts` файлы и перейдет сразу в CSS модуль.
 
 ## Использование
@@ -101,6 +108,7 @@ const x = styles; // Ctrl+Click на "styles" → откроется Button.modu
 Первый релиз:
 - Навигация по CSS модулям
 - Автосоздание классов
+- Автодополнение CSS классов (IntelliSense)
 - Hover для просмотра CSS классов (Ctrl+наведение)
 - Фильтрация .d.ts файлов
 - Альтернативный кейбиндинг Ctrl+Alt+D

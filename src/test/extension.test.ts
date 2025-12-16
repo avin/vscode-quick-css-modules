@@ -208,4 +208,40 @@ suite('CSS Modules Extension Test Suite', () => {
 		
 		assert.ok(cssHover, 'Should have hover with CSS class content');
 	});
+
+	test('Should provide completion for CSS classes', async () => {
+		const tsPath = path.join(testFilesDir, 'Test.tsx');
+		const doc = await vscode.workspace.openTextDocument(tsPath);
+		await vscode.window.showTextDocument(doc);
+		
+		await new Promise(resolve => setTimeout(resolve, 500));
+		
+		// Ищем позицию после "styles."
+		const text = doc.getText();
+		const stylesDotIndex = text.indexOf('styles.existing');
+		const position = doc.positionAt(stylesDotIndex + 'styles.'.length);
+		
+		// Вызываем Completion Provider
+		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
+			'vscode.executeCompletionItemProvider',
+			doc.uri,
+			position
+		);
+		
+		assert.ok(completions, 'Should return completions');
+		assert.ok(completions.items.length > 0, 'Should have completion items');
+		
+		// Проверяем что есть класс "existing"
+		const labels = completions.items.map(item => 
+			typeof item.label === 'string' ? item.label : item.label.label
+		);
+		console.log('Completion labels:', labels);
+		
+		const existingCompletion = completions.items.find(item => {
+			const label = typeof item.label === 'string' ? item.label : item.label.label;
+			return label === 'existing';
+		});
+		
+		assert.ok(existingCompletion, `Should have "existing" in completions. Got: ${labels.join(', ')}`);
+	});
 });

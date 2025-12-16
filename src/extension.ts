@@ -31,6 +31,13 @@ export function activate(context: vscode.ExtensionContext) {
 		new CSSModuleHoverProvider()
 	);
 
+	// Регистрируем Completion Provider для автодополнения классов
+	const completionProvider = vscode.languages.registerCompletionItemProvider(
+		selector,
+		new CSSModuleCompletionProvider(),
+		'.' // Триггер - точка
+	);
+
 	// Регистрируем команду для явного перехода к CSS модулю
 	const goToCSSModuleCommand = vscode.commands.registerCommand('quick-css-modules.goToCSSModule', async () => {
 		const editor = vscode.window.activeTextEditor;
@@ -73,7 +80,7 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 	}
 
-	context.subscriptions.push(definitionProvider, hoverProvider, goToCSSModuleCommand);
+	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, goToCSSModuleCommand);
 }
 
 function setupDefinitionFilter(context: vscode.ExtensionContext) {
@@ -530,5 +537,139 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 		}
 
 		return undefined;
+	}
+}
+
+class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
+	async provideCompletionItems(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken,
+		context: vscode.CompletionContext
+	): Promise<vscode.CompletionItem[] | undefined> {
+		const line = document.lineAt(position.line).text;
+		const textBeforeCursor = line.substring(0, position.character);
+		
+		// Ищем паттерн "variableName." или "variableName.partialText"
+		const match = textBeforeCursor.match(/(\w+)\.(\w*)$/);
+		if (!match) {
+			return undefined;
+		}
+
+		const variableName = match[1];
+
+		// Ищем импорты CSS модулей
+		const cssImports = this.findCSSModuleImports(document);
+		const cssImport = cssImports.find(imp => imp.variableName === variableName);
+		
+		if (!cssImport) {
+			return undefined;
+		}
+
+		// Читаем CSS файл и извлекаем все классы
+		try {
+			const uri = vscode.Uri.file(cssImport.filePath);
+			const cssDocument = await vscode.workspace.openTextDocument(uri);
+			const cssContent = cssDocument.getText();
+			
+			const classNames = this.extractClassNames(cssContent);
+			
+			// Создаем completion items
+			return classNames.map(className => {
+				const item = new vscode.CompletionItem(className, vscode.CompletionItemKind.Property);
+				item.detail = `CSS Module class from ${path.basename(cssImport.filePath)}`;
+				
+				// Добавляем документацию с превью класса
+				const classContent = this.getClassPreview(cssContent, className);
+				if (classContent) {
+					item.documentation = new vscode.MarkdownString();
+					item.documentation.appendCodeblock(classContent, 'scss');
+				}
+				
+				return item;
+			});
+		} catch (error) {
+			console.error('Error reading CSS file for completion:', error);
+			return undefined;
+		}
+	}
+
+	private extractClassNames(cssContent: string): string[] {
+		const classNames = new Set<string>();
+		
+		// Regex для поиска классов: .className
+		// Поддерживает простые классы и вложенные
+		const classRegex = /\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
+		
+		let match;
+		while ((match = classRegex.exec(cssContent)) !== null) {
+			const className = match[1];
+			// Исключаем псевдоклассы и псевдоэлементы
+			if (!className.startsWith(':') && !className.startsWith('::')) {
+				classNames.add(className);
+			}
+		}
+		
+		return Array.from(classNames).sort();
+	}
+
+	private getClassPreview(cssContent: string, className: string): string | undefined {
+		const classPattern = `.${className}`;
+		const classIndex = cssContent.indexOf(classPattern);
+		
+		if (classIndex === -1) {
+			return undefined;
+		}
+
+		// Ищем открывающую скобку
+		const openBraceIndex = cssContent.indexOf('{', classIndex);
+		if (openBraceIndex === -1) {
+			return undefined;
+		}
+
+		// Ищем закрывающую скобку
+		let depth = 0;
+		let closeBraceIndex = openBraceIndex;
+		
+		for (let i = openBraceIndex; i < cssContent.length; i++) {
+			if (cssContent[i] === '{') {
+				depth++;
+			} else if (cssContent[i] === '}') {
+				depth--;
+				if (depth === 0) {
+					closeBraceIndex = i;
+					break;
+				}
+			}
+		}
+
+		return cssContent.substring(classIndex, closeBraceIndex + 1);
+	}
+
+	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+		const imports: CSSModuleImport[] = [];
+		const text = document.getText();
+		
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
+		
+		let match;
+		while ((match = importRegex.exec(text)) !== null) {
+			const variableName = match[1];
+			const relativePath = match[2];
+			
+			const documentDir = path.dirname(document.uri.fsPath);
+			const absolutePath = path.resolve(documentDir, relativePath);
+			
+			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
+			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
+			
+			imports.push({
+				variableName,
+				filePath: absolutePath,
+				range: new vscode.Range(startPos, endPos)
+			});
+		}
+		
+		return imports;
 	}
 }
