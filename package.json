@@ -2,7 +2,7 @@
   "name": "quick-css-modules",
   "displayName": "Quick CSS Modules",
   "description": "Smart navigation, auto-creation, and refactoring for CSS Modules with support for SCSS, LESS, Stylus, and Vue",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "c75",
   "icon": "icon.png",
   "repository": {
