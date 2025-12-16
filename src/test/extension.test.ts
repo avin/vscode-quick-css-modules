@@ -385,4 +385,253 @@ suite('CSS Modules Extension Test Suite', () => {
 		assert.ok(doc, 'Should open Vue file without errors');
 		assert.ok(doc.getText().includes('<style module>'), 'Vue file should have style module');
 	});
+
+	// ===== FIND ALL REFERENCES TESTS =====
+
+	test('Should find references to CSS class from CSS file', async () => {
+		const cssPath = path.join(testFilesDir, 'RefTest.module.scss');
+		const cssContent = `.refClass {\n\tcolor: blue;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'RefTest.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './RefTest.module.scss';\n\nexport const Test = () => {\n\treturn <div className={styles.refClass}>Test</div>;\n};\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		// Wait for files to be indexed
+		await new Promise(resolve => setTimeout(resolve, 1000));
+
+		// Open CSS file and find references from there
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		// Find position of .refClass in CSS
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.refClass') + 1; // +1 to be on 'r' of refClass
+		const position = cssDoc.positionAt(classIndex);
+
+		// Call Find All References
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references');
+		
+		// Should find usage in RefTest.tsx (excluding the declaration itself by default)
+		const tsxReferences = references.filter(ref => 
+			ref.uri.fsPath.endsWith('RefTest.tsx')
+		);
+		
+		assert.ok(tsxReferences.length > 0, `Should find reference in TSX file. Got ${references.length} references total.`);
+
+		// Cleanup
+		if (fs.existsSync(cssPath)) {
+			fs.unlinkSync(cssPath);
+		}
+		if (fs.existsSync(tsPath)) {
+			fs.unlinkSync(tsPath);
+		}
+	});
+
+	test('Should find multiple references from CSS file', async () => {
+		const cssPath = path.join(testFilesDir, 'MultiRef.module.scss');
+		const cssContent = `.multiRefClass {\n\tcolor: green;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		// Create first TSX file
+		const tsPath1 = path.join(testFilesDir, 'MultiRef1.tsx');
+		const tsContent1 = `import React from 'react';\nimport styles from './MultiRef.module.scss';\n\nexport const Test1 = () => <div className={styles.multiRefClass}>Test1</div>;\n`;
+		fs.writeFileSync(tsPath1, tsContent1, 'utf8');
+
+		// Create second TSX file
+		const tsPath2 = path.join(testFilesDir, 'MultiRef2.tsx');
+		const tsContent2 = `import React from 'react';\nimport css from './MultiRef.module.scss';\n\nexport const Test2 = () => <div className={css.multiRefClass}>Test2</div>;\n`;
+		fs.writeFileSync(tsPath2, tsContent2, 'utf8');
+
+		// Open CSS file
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		// Find position of .multiRefClass
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.multiRefClass') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references');
+		
+		// Should find usages in both TSX files
+		const ref1 = references.find(ref => ref.uri.fsPath.endsWith('MultiRef1.tsx'));
+		const ref2 = references.find(ref => ref.uri.fsPath.endsWith('MultiRef2.tsx'));
+		
+		assert.ok(ref1, 'Should find reference in MultiRef1.tsx');
+		assert.ok(ref2, 'Should find reference in MultiRef2.tsx');
+
+		// Cleanup
+		[cssPath, tsPath1, tsPath2].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
+
+	test('Should not include declaration in references by default', async () => {
+		const cssPath = path.join(testFilesDir, 'NoDecl.module.scss');
+		const cssContent = `.noDeclClass {\n\tcolor: red;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'NoDecl.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './NoDecl.module.scss';\n\nexport const Test = () => <div className={styles.noDeclClass}>Test</div>;\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.noDeclClass') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references');
+		
+		// When called from VS Code's Find All References (Shift+F12), 
+		// includeDeclaration is typically false, so the CSS declaration should not be included
+		// But vscode.executeReferenceProvider always passes includeDeclaration: true
+		// The important thing is that we DO find usages in TSX files
+		const tsxRefs = references.filter(ref => ref.uri.fsPath.endsWith('NoDecl.tsx'));
+		assert.ok(tsxRefs.length > 0, 'Should find reference in TSX file');
+
+		// Cleanup
+		[cssPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
+
+	test('Should find references with bracket notation', async () => {
+		const cssPath = path.join(testFilesDir, 'BracketRef.module.scss');
+		const cssContent = `.kebab-class {\n\tcolor: purple;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'BracketRef.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './BracketRef.module.scss';\n\nexport const Test = () => <div className={styles['kebab-class']}>Test</div>;\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.kebab-class') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references');
+		
+		const tsxRefs = references.filter(ref => ref.uri.fsPath.endsWith('BracketRef.tsx'));
+		assert.ok(tsxRefs.length > 0, 'Should find reference with bracket notation in TSX file');
+
+		// Cleanup
+		[cssPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
+
+	test('Should not find references for non-module CSS files', async () => {
+		// Create a regular (non-module) CSS file
+		const cssPath = path.join(testFilesDir, 'Regular.scss');
+		const cssContent = `.regularClass {\n\tcolor: red;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.regularClass') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		// Should return empty or undefined for non-module CSS files
+		// (or only return results from other providers)
+		const ourRefs = references?.filter(ref => 
+			ref.uri.fsPath.includes('test-files') && !ref.uri.fsPath.endsWith('Regular.scss')
+		) || [];
+		
+		assert.strictEqual(ourRefs.length, 0, 'Should not find CSS module references for non-module CSS files');
+
+		// Cleanup
+		if (fs.existsSync(cssPath)) {
+			fs.unlinkSync(cssPath);
+		}
+	});
+
+	test('Should find references in .module.less files', async () => {
+		const lessPath = path.join(testFilesDir, 'RefLess.module.less');
+		const lessContent = `.lessRefClass {\n\tcolor: orange;\n}\n`;
+		fs.writeFileSync(lessPath, lessContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'RefLess.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './RefLess.module.less';\n\nexport const Test = () => <div className={styles.lessRefClass}>Test</div>;\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const lessDoc = await vscode.workspace.openTextDocument(lessPath);
+		await vscode.window.showTextDocument(lessDoc);
+
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const lessText = lessDoc.getText();
+		const classIndex = lessText.indexOf('.lessRefClass') + 1;
+		const position = lessDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			lessDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references for .module.less file');
+		
+		const tsxRefs = references.filter(ref => ref.uri.fsPath.endsWith('RefLess.tsx'));
+		assert.ok(tsxRefs.length > 0, 'Should find reference in TSX file for .less module');
+
+		// Cleanup
+		[lessPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
 });

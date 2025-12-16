@@ -102,6 +102,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		new CSSModuleRenameProvider()
 	);
 
+	// Register Reference Provider for finding usages of CSS classes from CSS files
+	const cssSelector = [
+		{ scheme: 'file', language: 'css' },
+		{ scheme: 'file', language: 'scss' },
+		{ scheme: 'file', language: 'sass' },
+		{ scheme: 'file', language: 'less' },
+		{ scheme: 'file', language: 'stylus' }
+	];
+
+	const referenceProvider = vscode.languages.registerReferenceProvider(
+		cssSelector,
+		new CSSModuleReferenceProvider()
+	);
+
 	// Register command for explicit navigation to CSS module
 	const goToCSSModuleCommand = vscode.commands.registerCommand('quick-css-modules.goToCSSModule', async () => {
 		const editor = vscode.window.activeTextEditor;
@@ -135,7 +149,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		})
 	);
 
-	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, renameProvider, goToCSSModuleCommand);
+	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, renameProvider, referenceProvider, goToCSSModuleCommand);
 }
 
 export function deactivate() {}
@@ -784,6 +798,197 @@ class CSSModuleRenameProvider implements vscode.RenameProvider {
 			};
 		}
 
+		return undefined;
+	}
+
+	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+		const imports: CSSModuleImport[] = [];
+		const text = document.getText();
+		
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
+		
+		let match;
+		while ((match = importRegex.exec(text)) !== null) {
+			const variableName = match[1];
+			const relativePath = match[2];
+			
+			const documentDir = path.dirname(document.uri.fsPath);
+			const absolutePath = path.resolve(documentDir, relativePath);
+			
+			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
+			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
+			
+			imports.push({
+				variableName,
+				filePath: absolutePath,
+				range: new vscode.Range(startPos, endPos)
+			});
+		}
+		
+		return imports;
+	}
+}
+
+// Reference Provider for finding usages of CSS classes from CSS module files
+class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
+	async provideReferences(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		context: vscode.ReferenceContext,
+		token: vscode.CancellationToken
+	): Promise<vscode.Location[] | undefined> {
+		// Check if this is a CSS module file
+		const filePath = document.uri.fsPath;
+		if (!this.isCSSModuleFile(filePath)) {
+			return undefined;
+		}
+
+		// Get the class name at cursor position
+		const className = this.getClassNameAtPosition(document, position);
+		if (!className) {
+			return undefined;
+		}
+
+		// Find all usages of this class in workspace
+		const references = await this.findClassUsages(document.uri, className, context.includeDeclaration);
+		
+		return references.length > 0 ? references : undefined;
+	}
+
+	private isCSSModuleFile(filePath: string): boolean {
+		return /\.module\.(scss|css|sass|less|styl|stylus)$/i.test(filePath);
+	}
+
+	private getClassNameAtPosition(document: vscode.TextDocument, position: vscode.Position): string | undefined {
+		const line = document.lineAt(position.line).text;
+		
+		// Find if cursor is on a class selector (.className)
+		// Use regex to find all class names in the line
+		const classRegex = /\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
+		let match;
+		
+		while ((match = classRegex.exec(line)) !== null) {
+			const classStart = match.index;
+			const classEnd = match.index + match[0].length;
+			
+			// Check if cursor position is within this class name
+			if (position.character >= classStart && position.character <= classEnd) {
+				return match[1]; // Return the class name without the dot
+			}
+		}
+		
+		return undefined;
+	}
+
+	private async findClassUsages(
+		cssFileUri: vscode.Uri,
+		className: string,
+		includeDeclaration: boolean
+	): Promise<vscode.Location[]> {
+		const references: vscode.Location[] = [];
+		const cssFilePath = cssFileUri.fsPath;
+
+		// Find all TypeScript/JavaScript files in workspace
+		let files = await vscode.workspace.findFiles(
+			'**/*.{ts,tsx,js,jsx,vue}',
+			'**/node_modules/**'
+		);
+
+		// If no files found from workspace, try to find files in the same directory as the CSS file
+		// This is useful for test scenarios or when files are outside the workspace
+		if (files.length === 0) {
+			const fs = await import('fs');
+			const cssDir = path.dirname(cssFilePath);
+			try {
+				const dirFiles = fs.readdirSync(cssDir);
+				const tsFiles = dirFiles.filter(f => /\.(ts|tsx|js|jsx|vue)$/.test(f));
+				files = tsFiles.map(f => vscode.Uri.file(path.join(cssDir, f)));
+			} catch (error) {
+				console.error('Error reading directory:', error);
+			}
+		}
+
+		// Escape special regex characters in className (for classes like kebab-case)
+		const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+		for (const fileUri of files) {
+			try {
+				const document = await vscode.workspace.openTextDocument(fileUri);
+				const imports = this.findCSSModuleImports(document);
+
+				// Check if this file imports the CSS module we're searching from
+				const relevantImport = imports.find(imp => {
+					// Normalize paths for comparison (handle different path separators and case)
+					const normalizedImp = path.normalize(imp.filePath).toLowerCase();
+					const normalizedCss = path.normalize(cssFilePath).toLowerCase();
+					return normalizedImp === normalizedCss;
+				});
+
+				if (!relevantImport) {
+					continue;
+				}
+
+				// Find all usages of variableName.className
+				const text = document.getText();
+				const usageRegex = new RegExp(`\\b${relevantImport.variableName}\\.${escapedClassName}\\b`, 'g');
+				let match;
+
+				while ((match = usageRegex.exec(text)) !== null) {
+					// Calculate position of the property name (after the dot)
+					const dotIndex = match.index + relevantImport.variableName.length + 1;
+					const startPos = document.positionAt(dotIndex);
+					const endPos = document.positionAt(dotIndex + className.length);
+					const range = new vscode.Range(startPos, endPos);
+					references.push(new vscode.Location(fileUri, range));
+				}
+
+				// Also check for bracket notation: variableName['className'] or variableName["className"]
+				const bracketRegex = new RegExp(`\\b${relevantImport.variableName}\\[['"]${escapedClassName}['"]\\]`, 'g');
+				while ((match = bracketRegex.exec(text)) !== null) {
+					// Position at the class name inside brackets
+					const nameStart = match.index + relevantImport.variableName.length + 2; // +2 for [' or ["
+					const startPos = document.positionAt(nameStart);
+					const endPos = document.positionAt(nameStart + className.length);
+					const range = new vscode.Range(startPos, endPos);
+					references.push(new vscode.Location(fileUri, range));
+				}
+			} catch (error) {
+				console.error(`Error processing file ${fileUri.fsPath}:`, error);
+			}
+		}
+
+		// Include declaration (the class definition in CSS file) if requested
+		if (includeDeclaration) {
+			const declarationLocation = await this.findClassDeclaration(cssFileUri, className);
+			if (declarationLocation) {
+				references.push(declarationLocation);
+			}
+		}
+
+		return references;
+	}
+
+	private async findClassDeclaration(
+		cssFileUri: vscode.Uri,
+		className: string
+	): Promise<vscode.Location | undefined> {
+		try {
+			const document = await vscode.workspace.openTextDocument(cssFileUri);
+			const text = document.getText();
+			
+			// Find the class definition .className
+			const classPattern = `.${className}`;
+			const classIndex = text.indexOf(classPattern);
+			
+			if (classIndex !== -1) {
+				const startPos = document.positionAt(classIndex);
+				const endPos = document.positionAt(classIndex + classPattern.length);
+				return new vscode.Location(cssFileUri, new vscode.Range(startPos, endPos));
+			}
+		} catch (error) {
+			console.error('Error finding class declaration:', error);
+		}
+		
 		return undefined;
 	}
 
