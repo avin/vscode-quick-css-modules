@@ -133,6 +133,48 @@ suite('CSS Modules Extension Test Suite', () => {
 		}
 	});
 
+	test('Should provide definition for bracket notation styles["className"]', async () => {
+		const cssPath = path.join(testFilesDir, 'BracketDef.module.scss');
+		const cssContent = `.bracketClass {\n\tcolor: red;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'BracketDef.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './BracketDef.module.scss';\n\nexport const Test = () => {\n\treturn <div className={styles['bracketClass']}>Test</div>;\n};\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const doc = await vscode.workspace.openTextDocument(tsPath);
+		await vscode.window.showTextDocument(doc);
+		
+		await new Promise(resolve => setTimeout(resolve, 500));
+		
+		const text = doc.getText();
+		// Find position of 'bracketClass' inside the brackets
+		const classNameIndex = text.indexOf("styles['bracketClass']") + "styles['".length;
+		const position = doc.positionAt(classNameIndex);
+		
+		const definitions = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeDefinitionProvider',
+			doc.uri,
+			position
+		);
+		
+		assert.ok(definitions, 'Should return definitions for bracket notation');
+		assert.ok(definitions.length > 0, 'Should have at least one definition');
+		
+		const cssDefinition = definitions.find(def => 
+			def.uri.fsPath.endsWith('BracketDef.module.scss')
+		);
+		
+		assert.ok(cssDefinition, 'Should point to CSS module for bracket notation');
+
+		// Cleanup
+		[cssPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
+
 	test('Should create new CSS class if not exists', async () => {
 		const cssPath = path.join(testFilesDir, 'TestCreate.module.scss');
 		const tsPath = path.join(testFilesDir, 'TestCreate.tsx');

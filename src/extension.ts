@@ -265,6 +265,20 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 			}
 		}
 
+		// Check for bracket notation: objectName['propertyName'] or objectName["propertyName"]
+		// Clicked on propertyName inside quotes
+		const bracketMatch = beforeWord.match(/(\w+)\[['"]$/);
+		if (bracketMatch) {
+			const afterQuote = line.substring(wordRange.end.character);
+			// Verify it ends with '] or "]
+			if (/^['"]/.test(afterQuote)) {
+				return {
+					objectName: bracketMatch[1],
+					propertyName: word
+				};
+			}
+		}
+
 		return undefined;
 	}
 
@@ -489,6 +503,18 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 				return {
 					objectName: word,
 					propertyName: propertyMatch[1]
+				};
+			}
+		}
+
+		// Check for bracket notation: objectName['propertyName'] or objectName["propertyName"]
+		const bracketMatch = beforeWord.match(/(\w+)\[['"]$/);
+		if (bracketMatch) {
+			const afterQuote = line.substring(wordRange.end.character);
+			if (/^['"]/.test(afterQuote)) {
+				return {
+					objectName: bracketMatch[1],
+					propertyName: word
 				};
 			}
 		}
