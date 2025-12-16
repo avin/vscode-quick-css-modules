@@ -10,12 +10,13 @@ interface CSSModuleImport {
 export function activate(context: vscode.ExtensionContext) {
 	console.log('CSS Modules extension is now active!');
 
-	// Register Definition Provider for TypeScript, JavaScript, TSX, JSX
+	// Register Definition Provider for TypeScript, JavaScript, TSX, JSX, Vue
 	const selector = [
 		{ scheme: 'file', language: 'typescript' },
 		{ scheme: 'file', language: 'javascript' },
 		{ scheme: 'file', language: 'typescriptreact' },
-		{ scheme: 'file', language: 'javascriptreact' }
+		{ scheme: 'file', language: 'javascriptreact' },
+		{ scheme: 'file', language: 'vue' }
 	];
 
 	const provider = new CSSModuleDefinitionProvider();
@@ -36,6 +37,12 @@ export function activate(context: vscode.ExtensionContext) {
 		selector,
 		new CSSModuleCompletionProvider(),
 		'.' // Trigger character - dot
+	);
+
+	// Register Rename Provider for refactoring CSS class names
+	const renameProvider = vscode.languages.registerRenameProvider(
+		selector,
+		new CSSModuleRenameProvider()
 	);
 
 	// Register command for explicit navigation to CSS module
@@ -248,7 +255,8 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 		const text = document.getText();
 		
 		// Regex to find imports like: import styles from './file.module.scss'
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
+		// Supports: .css, .scss, .sass, .less, .styl, .stylus
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
 		
 		let match;
 		while ((match = importRegex.exec(text)) !== null) {
@@ -480,7 +488,7 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 		const imports: CSSModuleImport[] = [];
 		const text = document.getText();
 		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
 		
 		let match;
 		while ((match = importRegex.exec(text)) !== null) {
@@ -651,6 +659,204 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 		const text = document.getText();
 		
 		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
+		
+		let match;
+		while ((match = importRegex.exec(text)) !== null) {
+			const variableName = match[1];
+			const relativePath = match[2];
+			
+			const documentDir = path.dirname(document.uri.fsPath);
+			const absolutePath = path.resolve(documentDir, relativePath);
+			
+			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
+			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
+			
+			imports.push({
+				variableName,
+				filePath: absolutePath,
+				range: new vscode.Range(startPos, endPos)
+			});
+		}
+		
+		return imports;
+	}
+}
+
+// Rename Provider for CSS class refactoring
+class CSSModuleRenameProvider implements vscode.RenameProvider {
+	async provideRenameEdits(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		newName: string,
+		token: vscode.CancellationToken
+	): Promise<vscode.WorkspaceEdit | undefined> {
+		const wordRange = document.getWordRangeAtPosition(position);
+		if (!wordRange) {
+			return undefined;
+		}
+
+		const word = document.getText(wordRange);
+		
+		// Find CSS module imports
+		const cssImports = this.findCSSModuleImports(document);
+		
+		// Check if renaming a CSS module property
+		const propertyMatch = this.getPropertyAccess(document, position, word);
+		if (!propertyMatch) {
+			return undefined;
+		}
+
+		const { objectName, propertyName } = propertyMatch;
+		const cssImport = cssImports.find(imp => imp.variableName === objectName);
+		
+		if (!cssImport) {
+			return undefined;
+		}
+
+		const workspaceEdit = new vscode.WorkspaceEdit();
+
+		// 1. Rename in CSS file
+		await this.renameInCSSFile(cssImport.filePath, propertyName, newName, workspaceEdit);
+
+		// 2. Find all usages in workspace and rename
+		await this.renameInWorkspace(cssImport.filePath, objectName, propertyName, newName, workspaceEdit);
+
+		return workspaceEdit;
+	}
+
+	async prepareRename(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken
+	): Promise<vscode.Range | { range: vscode.Range; placeholder: string } | undefined> {
+		const wordRange = document.getWordRangeAtPosition(position);
+		if (!wordRange) {
+			return undefined;
+		}
+
+		const word = document.getText(wordRange);
+		const cssImports = this.findCSSModuleImports(document);
+		const propertyMatch = this.getPropertyAccess(document, position, word);
+		
+		if (!propertyMatch) {
+			throw new Error('Cannot rename: Not a CSS module property');
+		}
+
+		const { objectName, propertyName } = propertyMatch;
+		const cssImport = cssImports.find(imp => imp.variableName === objectName);
+		
+		if (!cssImport) {
+			throw new Error('Cannot rename: CSS module not found');
+		}
+
+		return {
+			range: wordRange,
+			placeholder: propertyName
+		};
+	}
+
+	private async renameInCSSFile(
+		cssFilePath: string,
+		oldName: string,
+		newName: string,
+		edit: vscode.WorkspaceEdit
+	): Promise<void> {
+		try {
+			const uri = vscode.Uri.file(cssFilePath);
+			const cssDocument = await vscode.workspace.openTextDocument(uri);
+			const cssContent = cssDocument.getText();
+
+			// Find all occurrences of .oldName in CSS
+			const regex = new RegExp(`\\.${oldName}\\b`, 'g');
+			let match;
+
+			while ((match = regex.exec(cssContent)) !== null) {
+				const startPos = cssDocument.positionAt(match.index + 1); // +1 to skip the dot
+				const endPos = cssDocument.positionAt(match.index + 1 + oldName.length);
+				const range = new vscode.Range(startPos, endPos);
+				edit.replace(uri, range, newName);
+			}
+		} catch (error) {
+			console.error('Error renaming in CSS file:', error);
+		}
+	}
+
+	private async renameInWorkspace(
+		cssFilePath: string,
+		variableName: string,
+		oldName: string,
+		newName: string,
+		edit: vscode.WorkspaceEdit
+	): Promise<void> {
+		// Find all TypeScript/JavaScript files in workspace
+		const files = await vscode.workspace.findFiles(
+			'**/*.{ts,tsx,js,jsx}',
+			'**/node_modules/**'
+		);
+
+		for (const fileUri of files) {
+			try {
+				const document = await vscode.workspace.openTextDocument(fileUri);
+				const imports = this.findCSSModuleImports(document);
+
+				// Check if this file imports the same CSS module
+				const relevantImport = imports.find(imp => 
+					path.normalize(imp.filePath) === path.normalize(cssFilePath)
+				);
+
+				if (!relevantImport) {
+					continue;
+				}
+
+				// Find all usages of variableName.oldName
+				const text = document.getText();
+				const usageRegex = new RegExp(`\\b${relevantImport.variableName}\\.${oldName}\\b`, 'g');
+				let match;
+
+				while ((match = usageRegex.exec(text)) !== null) {
+					// Calculate position of the property name (after the dot)
+					const dotIndex = match.index + relevantImport.variableName.length + 1;
+					const startPos = document.positionAt(dotIndex);
+					const endPos = document.positionAt(dotIndex + oldName.length);
+					const range = new vscode.Range(startPos, endPos);
+					edit.replace(fileUri, range, newName);
+				}
+			} catch (error) {
+				console.error(`Error processing file ${fileUri.fsPath}:`, error);
+			}
+		}
+	}
+
+	private getPropertyAccess(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		word: string
+	): { objectName: string; propertyName: string } | undefined {
+		const line = document.lineAt(position.line).text;
+		const wordRange = document.getWordRangeAtPosition(position);
+		
+		if (!wordRange) {
+			return undefined;
+		}
+
+		const beforeWord = line.substring(0, wordRange.start.character);
+		const dotMatch = beforeWord.match(/(\w+)\.$/);
+		
+		if (dotMatch) {
+			return {
+				objectName: dotMatch[1],
+				propertyName: word
+			};
+		}
+
+		return undefined;
+	}
+
+	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+		const imports: CSSModuleImport[] = [];
+		const text = document.getText();
+		
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
 		
 		let match;
 		while ((match = importRegex.exec(text)) !== null) {

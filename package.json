@@ -1,7 +1,7 @@
 {
   "name": "quick-css-modules",
   "displayName": "Quick CSS Modules",
-  "description": "Smart navigation and auto-creation for CSS Modules with .d.ts filtering",
+  "description": "Smart navigation, auto-creation, and refactoring for CSS Modules with support for SCSS, LESS, Stylus, and Vue",
   "version": "0.0.1",
   "publisher": "your-publisher-name",
   "repository": {
@@ -18,7 +18,8 @@
     "onLanguage:typescript",
     "onLanguage:javascript",
     "onLanguage:typescriptreact",
-    "onLanguage:javascriptreact"
+    "onLanguage:javascriptreact",
+    "onLanguage:vue"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -37,7 +38,7 @@
         "command": "quick-css-modules.revealDefinition",
         "key": "ctrl+alt+d",
         "mac": "cmd+alt+d",
-        "when": "editorTextFocus && (editorLangId == typescript || editorLangId == typescriptreact || editorLangId == javascript || editorLangId == javascriptreact)"
+        "when": "editorTextFocus && (editorLangId == typescript || editorLangId == typescriptreact || editorLangId == javascript || editorLangId == javascriptreact || editorLangId == vue)"
       }
     ],
     "configuration": {

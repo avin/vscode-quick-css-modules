@@ -45,6 +45,21 @@ Hover over CSS module properties with **Ctrl** held down to preview the class co
 <div className={styles.container}>  // Ctrl+Hover shows CSS content
 ```
 
+### Rename Refactoring
+Rename CSS classes across your entire project - the extension updates both the CSS file and all TypeScript/JavaScript usages:
+- Position cursor on a class name (e.g., `styles.oldName`)
+- Press **F2** or right-click → "Rename Symbol"
+- Enter new name - all usages update automatically
+
+```typescript
+// Before: styles.oldName
+<div className={styles.oldName}>
+
+// After rename to "newName":
+<div className={styles.newName}>
+// CSS file also updated: .oldName → .newName
+```
+
 ### Filter Declaration Files
 Use **Ctrl+Alt+D** for navigation that skips TypeScript `.d.ts` declaration files and goes directly to the CSS module file.
 
@@ -83,13 +98,16 @@ You can override the default F12 behavior to always filter `.d.ts` files. Add th
 ## Supported File Types
 
 ### CSS Module Files
-- `*.module.css`
-- `*.module.scss`
-- `*.module.sass`
+- `*.module.css` - Standard CSS Modules
+- `*.module.scss` - Sass/SCSS Modules
+- `*.module.sass` - Sass indented syntax
+- `*.module.less` - LESS Modules
+- `*.module.styl` / `*.module.stylus` - Stylus Modules
 
 ### Source Files
 - TypeScript (`.ts`, `.tsx`)
 - JavaScript (`.js`, `.jsx`)
+- Vue Single File Components (`.vue`) - with `<style module>` support
 
 ## Known Issues
 
@@ -113,6 +131,9 @@ Features included:
 - CSS preview on hover (Ctrl+Hover)
 - Declaration file filtering
 - Enhanced navigation keybinding (Ctrl+Alt+D)
+- **Rename refactoring** - rename classes across CSS and all usages (F2)
+- **Extended file format support** - .less, .styl/.stylus modules
+- **Framework support** - Vue SFC with `<style module>`
 
 ---
 
