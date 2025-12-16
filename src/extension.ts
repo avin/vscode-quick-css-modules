@@ -8,6 +8,13 @@ interface CSSModuleImport {
 	range: vscode.Range;
 }
 
+const CSS_MODULE_EXTENSIONS = ['css', 'scss', 'sass', 'less', 'styl', 'stylus'] as const;
+const CSS_MODULE_PATTERN = `\\.module\\.(${CSS_MODULE_EXTENSIONS.join('|')})`;
+
+function buildCSSModuleImportRegex(): RegExp {
+	return new RegExp(`import\\s+(\\w+)\\s+from\\s+['"]([^'"]+${CSS_MODULE_PATTERN})['"]`, 'g');
+}
+
 // Diagnostic code for missing CSS class
 const MISSING_CSS_CLASS_CODE = 'cssModules.missingClass';
 
@@ -23,67 +30,114 @@ function resolveAliasedPathSync(importPath: string, document: vscode.TextDocumen
 	}
 
 	const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-	if (!workspaceFolder) {
-		return importPath;
-	}
+	const workspaceRoot = workspaceFolder?.uri.fsPath;
 
 	const configFiles = ['tsconfig.json', 'jsconfig.json'];
-	
-	for (const configFile of configFiles) {
-		const configPath = path.join(workspaceFolder.uri.fsPath, configFile);
-		
-		try {
-			if (fs.existsSync(configPath)) {
-				const content = fs.readFileSync(configPath, 'utf8');
-				// Remove comments
-				const jsonContent = content.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-				const config = JSON.parse(jsonContent);
-				
-				const baseUrl = config.compilerOptions?.baseUrl;
-				const paths = config.compilerOptions?.paths;
-				
-				if (paths) {
-					for (const [alias, targets] of Object.entries(paths)) {
-						const aliasPattern = alias.replace(/\*/g, '(.*)');
-						const regex = new RegExp(`^${aliasPattern.replace(/\//g, '\\/')}$`);
-						const match = importPath.match(regex);
-						
-						if (match) {
-							for (const target of targets as string[]) {
-								let resolvedTarget = target;
-								if (match[1]) {
-									resolvedTarget = target.replace('*', match[1]);
-								}
-								
-								const basePath = baseUrl 
-									? path.join(workspaceFolder.uri.fsPath, baseUrl)
-									: workspaceFolder.uri.fsPath;
-								
-								const fullPath = path.join(basePath, resolvedTarget);
-								
-								if (fs.existsSync(fullPath)) {
-									return fullPath;
+	const searchDirs: string[] = [];
+	let currentDir = path.dirname(document.uri.fsPath);
+
+	while (true) {
+		if (!searchDirs.includes(currentDir)) {
+			searchDirs.push(currentDir);
+		}
+
+		if (!workspaceRoot || currentDir === workspaceRoot) {
+			break;
+		}
+
+		const parentDir = path.dirname(currentDir);
+		if (parentDir === currentDir) {
+			break;
+		}
+		currentDir = parentDir;
+	}
+
+	if (workspaceRoot && !searchDirs.includes(workspaceRoot)) {
+		searchDirs.push(workspaceRoot);
+	}
+
+	for (const dir of searchDirs) {
+		for (const configFile of configFiles) {
+			const configPath = path.join(dir, configFile);
+			
+			try {
+				if (fs.existsSync(configPath)) {
+					const content = fs.readFileSync(configPath, 'utf8');
+					// Remove comments
+					const jsonContent = content.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+					const config = JSON.parse(jsonContent);
+					
+					const baseUrl = config.compilerOptions?.baseUrl;
+					const paths = config.compilerOptions?.paths;
+					
+					if (paths) {
+						for (const [alias, targets] of Object.entries(paths)) {
+							const aliasPattern = alias.replace(/\*/g, '(.*)');
+							const regex = new RegExp(`^${aliasPattern.replace(/\//g, '\\/')}$`);
+							const match = importPath.match(regex);
+							
+							if (match) {
+								for (const target of targets as string[]) {
+									let resolvedTarget = target;
+									if (match[1]) {
+										resolvedTarget = target.replace('*', match[1]);
+									}
+									
+									const basePath = baseUrl 
+										? path.join(dir, baseUrl)
+										: dir;
+									
+									const fullPath = path.join(basePath, resolvedTarget);
+									
+									if (fs.existsSync(fullPath)) {
+										return fullPath;
+									}
 								}
 							}
 						}
 					}
-				}
-				
-				// Try baseUrl only
-				if (baseUrl) {
-					const basePath = path.join(workspaceFolder.uri.fsPath, baseUrl);
-					const resolved = path.join(basePath, importPath);
-					if (fs.existsSync(resolved)) {
-						return resolved;
+					
+					// Try baseUrl only
+					if (baseUrl) {
+						const basePath = path.join(dir, baseUrl);
+						const resolved = path.join(basePath, importPath);
+						if (fs.existsSync(resolved)) {
+							return resolved;
+						}
 					}
 				}
+			} catch (error) {
+				console.error(`Error parsing ${configFile}:`, error);
 			}
-		} catch (error) {
-			console.error(`Error parsing ${configFile}:`, error);
 		}
 	}
 	
 	return importPath;
+}
+
+function findCSSModuleImportsInDocument(document: vscode.TextDocument): CSSModuleImport[] {
+	const imports: CSSModuleImport[] = [];
+	const text = document.getText();
+	const importRegex = buildCSSModuleImportRegex();
+
+	let match: RegExpExecArray | null;
+	while ((match = importRegex.exec(text)) !== null) {
+		const variableName = match[1];
+		const importPath = match[2];
+		
+		const absolutePath = resolveAliasedPathSync(importPath, document);
+		
+		const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
+		const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
+		
+		imports.push({
+			variableName,
+			filePath: absolutePath,
+			range: new vscode.Range(startPos, endPos)
+		});
+	}
+
+	return imports;
 }
 
 function getTypeScriptExtension(): vscode.Extension<any> | undefined {
@@ -423,33 +477,7 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 	}
 
 	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		// Regex to find imports like: import styles from './file.module.scss'
-		// Supports: .css, .scss, .sass, .less, .styl, .stylus
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			const variableName = match[1];
-			const importPath = match[2];
-			
-			// Resolve path (supports aliases from tsconfig/jsconfig)
-			const absolutePath = resolveAliasedPathSync(importPath, document);
-			
-			// Find variable position in document
-			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
-			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
-			
-			imports.push({
-				variableName,
-				filePath: absolutePath,
-				range: new vscode.Range(startPos, endPos)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 
 	private async getExternalDefinitions(
@@ -823,30 +851,7 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 	}
 
 	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			const variableName = match[1];
-			const relativePath = match[2];
-			
-			const documentDir = path.dirname(document.uri.fsPath);
-			const absolutePath = path.resolve(documentDir, relativePath);
-			
-			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
-			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
-			
-			imports.push({
-				variableName,
-				filePath: absolutePath,
-				range: new vscode.Range(startPos, endPos)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 
 	private getPropertyAccess(
@@ -1005,30 +1010,7 @@ class CSSModuleCompletionProvider implements vscode.CompletionItemProvider {
 	}
 
 	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			const variableName = match[1];
-			const relativePath = match[2];
-			
-			const documentDir = path.dirname(document.uri.fsPath);
-			const absolutePath = path.resolve(documentDir, relativePath);
-			
-			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
-			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
-			
-			imports.push({
-				variableName,
-				filePath: absolutePath,
-				range: new vscode.Range(startPos, endPos)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 }
 
@@ -1203,30 +1185,7 @@ class CSSModuleRenameProvider implements vscode.RenameProvider {
 	}
 
 	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			const variableName = match[1];
-			const relativePath = match[2];
-			
-			const documentDir = path.dirname(document.uri.fsPath);
-			const absolutePath = path.resolve(documentDir, relativePath);
-			
-			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
-			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
-			
-			imports.push({
-				variableName,
-				filePath: absolutePath,
-				range: new vscode.Range(startPos, endPos)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 }
 
@@ -1435,30 +1394,7 @@ class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
 	}
 
 	private findCSSModuleImportsForRef(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			const variableName = match[1];
-			const relativePath = match[2];
-			
-			const documentDir = path.dirname(document.uri.fsPath);
-			const absolutePath = path.resolve(documentDir, relativePath);
-			
-			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
-			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
-			
-			imports.push({
-				variableName,
-				filePath: absolutePath,
-				range: new vscode.Range(startPos, endPos)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 }
 
@@ -1746,21 +1682,7 @@ class CSSModuleAutoImportProvider implements vscode.CompletionItemProvider {
 	}
 
 	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			imports.push({
-				variableName: match[1],
-				filePath: match[2],
-				range: new vscode.Range(0, 0, 0, 0)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 
 	private async findCSSModuleFilesNearby(directory: string, baseName: string): Promise<vscode.Uri[]> {
@@ -1996,29 +1918,7 @@ class CSSModuleDiagnosticsProvider {
 	}
 
 	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
-		const imports: CSSModuleImport[] = [];
-		const text = document.getText();
-		
-		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
-		
-		let match;
-		while ((match = importRegex.exec(text)) !== null) {
-			const variableName = match[1];
-			const importPath = match[2];
-			
-			const absolutePath = resolveAliasedPathSync(importPath, document);
-			
-			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
-			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
-			
-			imports.push({
-				variableName,
-				filePath: absolutePath,
-				range: new vscode.Range(startPos, endPos)
-			});
-		}
-		
-		return imports;
+		return findCSSModuleImportsInDocument(document);
 	}
 
 	private extractCSSClasses(filePath: string): Set<string> {

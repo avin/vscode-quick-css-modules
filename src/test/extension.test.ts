@@ -1134,6 +1134,54 @@ suite('CSS Modules Extension Test Suite', () => {
 			fs.rmdirSync(stylesDir);
 		}
 	});
-});
 
+	test('Should navigate to definition when using local tsconfig alias', async () => {
+		const aliasRoot = path.join(testFilesDir, 'alias-workspace');
+		const stylesDir = path.join(aliasRoot, 'styles');
+		const tsconfigPath = path.join(aliasRoot, 'tsconfig.json');
+
+		fs.mkdirSync(stylesDir, { recursive: true });
+
+		const tsconfigContent = JSON.stringify({
+			compilerOptions: {
+				baseUrl: ".",
+				paths: {
+					"@alias/*": ["styles/*"]
+				}
+			}
+		}, null, 2);
+		fs.writeFileSync(tsconfigPath, tsconfigContent, 'utf8');
+
+		const cssPath = path.join(stylesDir, 'AliasLocal.module.scss');
+		const cssContent = `.aliased {\n\tcolor: teal;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(aliasRoot, 'AliasLocal.tsx');
+		const tsContent = `import React from 'react';\nimport styles from '@alias/AliasLocal.module.scss';\n\nexport const AliasLocal = () => (\n\t<div className={styles.aliased}>Alias</div>\n);\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const doc = await vscode.workspace.openTextDocument(tsPath);
+		await vscode.window.showTextDocument(doc);
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const text = doc.getText();
+		const classNameIndex = text.indexOf('styles.aliased') + 'styles.'.length;
+		const position = doc.positionAt(classNameIndex);
+
+		const definitions = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeDefinitionProvider',
+			doc.uri,
+			position
+		);
+
+		assert.ok(definitions && definitions.length > 0, 'Should return definitions for alias import');
+		const cssDefinition = definitions?.find(def => def.uri.fsPath.endsWith('AliasLocal.module.scss'));
+		assert.ok(cssDefinition, 'Should point to aliased CSS module');
+
+		// Cleanup
+		if (fs.existsSync(aliasRoot)) {
+			fs.rmSync(aliasRoot, { recursive: true, force: true });
+		}
+	});
+});
 
