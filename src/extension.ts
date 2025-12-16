@@ -887,15 +887,26 @@ class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
 	): Promise<vscode.Location[]> {
 		const references: vscode.Location[] = [];
 		const cssFilePath = cssFileUri.fsPath;
+		const cssFileName = path.basename(cssFilePath);
 
-		// Find all TypeScript/JavaScript files in workspace
+		// Escape special regex characters in className (for classes like kebab-case)
+		const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+		// Step 1: Find candidate files using VS Code's optimized file search
+		// First, look in already opened documents (instant, no I/O)
+		const openDocuments = vscode.workspace.textDocuments.filter(doc => 
+			/\.(ts|tsx|js|jsx|vue)$/.test(doc.uri.fsPath) &&
+			!doc.uri.fsPath.includes('node_modules') &&
+			doc.getText().includes(cssFileName)
+		);
+
+		// Then find files via workspace API
 		let files = await vscode.workspace.findFiles(
 			'**/*.{ts,tsx,js,jsx,vue}',
 			'**/node_modules/**'
 		);
 
-		// If no files found from workspace, try to find files in the same directory as the CSS file
-		// This is useful for test scenarios or when files are outside the workspace
+		// If no files found via workspace, try local directory (for tests)
 		if (files.length === 0) {
 			const fs = await import('fs');
 			const cssDir = path.dirname(cssFilePath);
@@ -908,52 +919,82 @@ class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
 			}
 		}
 
-		// Escape special regex characters in className (for classes like kebab-case)
-		const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		// Merge: prioritize already-open documents, then add remaining files
+		const processedPaths = new Set<string>();
+		const filesToProcess: vscode.Uri[] = [];
 
-		for (const fileUri of files) {
+		// Add open documents first (they're already in memory - fast!)
+		for (const doc of openDocuments) {
+			processedPaths.add(doc.uri.fsPath.toLowerCase());
+			filesToProcess.push(doc.uri);
+		}
+
+		// Add remaining files (will need to be read from disk)
+		for (const uri of files) {
+			if (!processedPaths.has(uri.fsPath.toLowerCase())) {
+				filesToProcess.push(uri);
+			}
+		}
+
+		// Step 2: Process files - use parallel processing for better performance
+		const processFile = async (fileUri: vscode.Uri): Promise<vscode.Location[]> => {
+			const fileRefs: vscode.Location[] = [];
 			try {
 				const document = await vscode.workspace.openTextDocument(fileUri);
+				const text = document.getText();
+				
+				// Quick check: skip file if it doesn't contain the CSS module filename
+				if (!text.includes(cssFileName)) {
+					return fileRefs;
+				}
+
 				const imports = this.findCSSModuleImports(document);
 
 				// Check if this file imports the CSS module we're searching from
 				const relevantImport = imports.find(imp => {
-					// Normalize paths for comparison (handle different path separators and case)
 					const normalizedImp = path.normalize(imp.filePath).toLowerCase();
 					const normalizedCss = path.normalize(cssFilePath).toLowerCase();
 					return normalizedImp === normalizedCss;
 				});
 
 				if (!relevantImport) {
-					continue;
+					return fileRefs;
 				}
 
 				// Find all usages of variableName.className
-				const text = document.getText();
 				const usageRegex = new RegExp(`\\b${relevantImport.variableName}\\.${escapedClassName}\\b`, 'g');
 				let match;
 
 				while ((match = usageRegex.exec(text)) !== null) {
-					// Calculate position of the property name (after the dot)
 					const dotIndex = match.index + relevantImport.variableName.length + 1;
 					const startPos = document.positionAt(dotIndex);
 					const endPos = document.positionAt(dotIndex + className.length);
 					const range = new vscode.Range(startPos, endPos);
-					references.push(new vscode.Location(fileUri, range));
+					fileRefs.push(new vscode.Location(fileUri, range));
 				}
 
 				// Also check for bracket notation: variableName['className'] or variableName["className"]
 				const bracketRegex = new RegExp(`\\b${relevantImport.variableName}\\[['"]${escapedClassName}['"]\\]`, 'g');
 				while ((match = bracketRegex.exec(text)) !== null) {
-					// Position at the class name inside brackets
-					const nameStart = match.index + relevantImport.variableName.length + 2; // +2 for [' or ["
+					const nameStart = match.index + relevantImport.variableName.length + 2;
 					const startPos = document.positionAt(nameStart);
 					const endPos = document.positionAt(nameStart + className.length);
 					const range = new vscode.Range(startPos, endPos);
-					references.push(new vscode.Location(fileUri, range));
+					fileRefs.push(new vscode.Location(fileUri, range));
 				}
 			} catch (error) {
 				console.error(`Error processing file ${fileUri.fsPath}:`, error);
+			}
+			return fileRefs;
+		};
+
+		// Process files in parallel batches for better performance
+		const BATCH_SIZE = 10;
+		for (let i = 0; i < filesToProcess.length; i += BATCH_SIZE) {
+			const batch = filesToProcess.slice(i, i + BATCH_SIZE);
+			const batchResults = await Promise.all(batch.map(processFile));
+			for (const fileRefs of batchResults) {
+				references.push(...fileRefs);
 			}
 		}
 

@@ -634,4 +634,121 @@ suite('CSS Modules Extension Test Suite', () => {
 			}
 		});
 	});
+
+	test('Should find references when TSX file is already open', async () => {
+		// This test verifies that the optimization for open documents works correctly
+		const cssPath = path.join(testFilesDir, 'OpenDoc.module.scss');
+		const cssContent = `.openDocClass {\n\tcolor: cyan;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'OpenDoc.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './OpenDoc.module.scss';\n\nexport const Test = () => <div className={styles.openDocClass}>Test</div>;\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		// First, open the TSX file (simulating it being already open in editor)
+		const tsDoc = await vscode.workspace.openTextDocument(tsPath);
+		await vscode.window.showTextDocument(tsDoc);
+		await new Promise(resolve => setTimeout(resolve, 300));
+
+		// Now open CSS file and search for references
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+		await new Promise(resolve => setTimeout(resolve, 300));
+
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.openDocClass') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references when TSX is already open');
+		
+		const tsxRefs = references.filter(ref => ref.uri.fsPath.endsWith('OpenDoc.tsx'));
+		assert.ok(tsxRefs.length > 0, 'Should find reference in already-open TSX file');
+
+		// Cleanup
+		[cssPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
+
+	test('Should find multiple usages of same class in one file', async () => {
+		const cssPath = path.join(testFilesDir, 'MultiUse.module.scss');
+		const cssContent = `.multiUseClass {\n\tcolor: magenta;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'MultiUse.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './MultiUse.module.scss';\n\nexport const Test = () => (\n\t<div>\n\t\t<span className={styles.multiUseClass}>First</span>\n\t\t<span className={styles.multiUseClass}>Second</span>\n\t\t<span className={styles['multiUseClass']}>Third (bracket)</span>\n\t</div>\n);\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.multiUseClass') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references');
+		
+		// Should find all 3 usages in the TSX file (2 dot notation + 1 bracket notation)
+		const tsxRefs = references.filter(ref => ref.uri.fsPath.endsWith('MultiUse.tsx'));
+		assert.ok(tsxRefs.length >= 3, `Should find at least 3 references in TSX file. Got ${tsxRefs.length}`);
+
+		// Cleanup
+		[cssPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
+
+	test('Should handle class names with special characters', async () => {
+		const cssPath = path.join(testFilesDir, 'SpecialChars.module.scss');
+		// Class with underscore and numbers
+		const cssContent = `.my_class_123 {\n\tcolor: teal;\n}\n`;
+		fs.writeFileSync(cssPath, cssContent, 'utf8');
+
+		const tsPath = path.join(testFilesDir, 'SpecialChars.tsx');
+		const tsContent = `import React from 'react';\nimport styles from './SpecialChars.module.scss';\n\nexport const Test = () => <div className={styles.my_class_123}>Test</div>;\n`;
+		fs.writeFileSync(tsPath, tsContent, 'utf8');
+
+		const cssDoc = await vscode.workspace.openTextDocument(cssPath);
+		await vscode.window.showTextDocument(cssDoc);
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const cssText = cssDoc.getText();
+		const classIndex = cssText.indexOf('.my_class_123') + 1;
+		const position = cssDoc.positionAt(classIndex);
+
+		const references = await vscode.commands.executeCommand<vscode.Location[]>(
+			'vscode.executeReferenceProvider',
+			cssDoc.uri,
+			position
+		);
+
+		assert.ok(references, 'Should return references for class with special chars');
+		
+		const tsxRefs = references.filter(ref => ref.uri.fsPath.endsWith('SpecialChars.tsx'));
+		assert.ok(tsxRefs.length > 0, 'Should find reference for class with underscores and numbers');
+
+		// Cleanup
+		[cssPath, tsPath].forEach(p => {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		});
+	});
 });
