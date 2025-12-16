@@ -18,12 +18,146 @@ export function activate(context: vscode.ExtensionContext) {
 		{ scheme: 'file', language: 'javascriptreact' }
 	];
 
+	const provider = new CSSModuleDefinitionProvider();
+	
 	const definitionProvider = vscode.languages.registerDefinitionProvider(
 		selector,
-		new CSSModuleDefinitionProvider()
+		provider
 	);
 
-	context.subscriptions.push(definitionProvider);
+	// Регистрируем команду для явного перехода к CSS модулю
+	const goToCSSModuleCommand = vscode.commands.registerCommand('quick-css-modules.goToCSSModule', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return;
+		}
+
+		const position = editor.selection.active;
+		const locations = await provider.provideDefinition(editor.document, position, new vscode.CancellationTokenSource().token);
+		
+		if (locations) {
+			const locationArray = Array.isArray(locations) ? locations : [locations];
+			const location = locationArray[0] as vscode.Location;
+			
+			if (location && location.uri) {
+				await vscode.window.showTextDocument(location.uri, {
+					selection: location.range
+				});
+			}
+		} else {
+			vscode.window.showInformationMessage('No CSS module found at cursor position');
+		}
+	});
+
+	// Добавляем настройку для фильтрации .d.ts файлов
+	const config = vscode.workspace.getConfiguration('quick-css-modules');
+	const filterDTS = config.get<boolean>('filterDeclarationFiles', true);
+
+	if (filterDTS) {
+		// Перехватываем клики и фильтруем результаты
+		setupDefinitionFilter(context);
+	}
+
+	// Проверяем, нужно ли переопределить F12
+	const overrideF12 = config.get<boolean>('overrideGoToDefinition', false);
+	if (overrideF12) {
+		vscode.window.showInformationMessage(
+			'CSS Modules: To override F12, please manually add this to your keybindings.json:\n' +
+			'{ "key": "f12", "command": "quick-css-modules.revealDefinition", "when": "editorTextFocus" }'
+		);
+	}
+
+	context.subscriptions.push(definitionProvider, goToCSSModuleCommand);
+}
+
+function setupDefinitionFilter(context: vscode.ExtensionContext) {
+	// Перехватываем команду editor.action.revealDefinition
+	const originalCommand = 'editor.action.revealDefinition';
+	
+	// Регистрируем обработчик для текущего редактора
+	context.subscriptions.push(
+		vscode.commands.registerCommand('quick-css-modules.revealDefinition', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) {
+				return vscode.commands.executeCommand(originalCommand);
+			}
+
+			const position = editor.selection.active;
+			const document = editor.document;
+			
+			// Проверяем, является ли это CSS модулем
+			const wordRange = document.getWordRangeAtPosition(position);
+			if (!wordRange) {
+				return vscode.commands.executeCommand(originalCommand);
+			}
+
+			const word = document.getText(wordRange);
+			const helper = new CSSModuleDefinitionProvider();
+			const cssImports = helper['findCSSModuleImports'](document);
+			
+			// Если это переменная CSS модуля или её свойство - используем наш провайдер
+			const isCSSModule = cssImports.some(imp => imp.variableName === word) ||
+				isCSSModuleProperty(document, position, word, cssImports);
+			
+			if (isCSSModule) {
+				// Получаем все определения
+				const definitions = await vscode.commands.executeCommand<vscode.Location[]>(
+					'vscode.executeDefinitionProvider',
+					document.uri,
+					position
+				);
+				
+				if (definitions && definitions.length > 0) {
+					// Фильтруем .d.ts файлы (проверяем что def и def.uri существуют)
+					const filtered = definitions.filter(def => 
+						def && def.uri && !def.uri.fsPath.endsWith('.d.ts')
+					);
+					
+					if (filtered.length > 0) {
+						// Переходим к первому отфильтрованному результату
+						const target = filtered[0];
+						await vscode.window.showTextDocument(target.uri, {
+							selection: target.range
+						});
+						return;
+					}
+				}
+			}
+			
+			// В остальных случаях - вызываем стандартную команду
+			return vscode.commands.executeCommand(originalCommand);
+		})
+	);
+}
+
+function isCSSModuleProperty(
+	document: vscode.TextDocument,
+	position: vscode.Position,
+	word: string,
+	cssImports: CSSModuleImport[]
+): boolean {
+	const line = document.lineAt(position.line).text;
+	const wordRange = document.getWordRangeAtPosition(position);
+	
+	if (!wordRange) {
+		return false;
+	}
+
+	// Проверяем objectName.property
+	const beforeWord = line.substring(0, wordRange.start.character);
+	const dotMatch = beforeWord.match(/(\w+)\.$/);
+	
+	if (dotMatch) {
+		return cssImports.some(imp => imp.variableName === dotMatch[1]);
+	}
+
+	// Проверяем property после objectName
+	const afterWord = line.substring(wordRange.end.character);
+	if (afterWord.startsWith('.')) {
+		return cssImports.some(imp => imp.variableName === word);
+	}
+
+	return false;
 }
 
 export function deactivate() {}
