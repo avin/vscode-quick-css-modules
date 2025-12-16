@@ -7,8 +7,65 @@ interface CSSModuleImport {
 	range: vscode.Range;
 }
 
-export function activate(context: vscode.ExtensionContext) {
+async function configureTypeScriptPlugin() {
+	const config = vscode.workspace.getConfiguration('quick-css-modules');
+	const enablePlugin = config.get<boolean>('enableTypeScriptPlugin', true);
+
+	if (!enablePlugin) {
+		return;
+	}
+
+	try {
+		// Get TypeScript extension
+		const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
+		if (!tsExtension) {
+			console.warn('TypeScript extension not found');
+			return;
+		}
+
+		// Activate TypeScript extension
+		if (!tsExtension.isActive) {
+			await tsExtension.activate();
+		}
+
+		// Get TypeScript API
+		const tsApi = tsExtension.exports;
+		if (!tsApi || !tsApi.getAPI) {
+			console.warn('TypeScript API not available');
+			return;
+		}
+
+		const api = tsApi.getAPI(0);
+		if (!api || !api.configurePlugin) {
+			console.warn('TypeScript API configurePlugin not available');
+			return;
+		}
+
+		// Configure the cleanup plugin
+		api.configurePlugin('typescript-cleanup-definitions', {
+			name: 'typescript-cleanup-definitions',
+			enable: true,
+			modules: [
+				'*.module.css',
+				'*.module.scss',
+				'*.module.sass',
+				'*.module.less',
+				'*.module.styl',
+				'*.module.stylus'
+			]
+		});
+
+		console.log('TypeScript cleanup plugin configured successfully');
+	} catch (error) {
+		console.error('Error configuring TypeScript plugin:', error);
+	}
+}
+
+export async function activate(context: vscode.ExtensionContext) {
 	console.log('CSS Modules extension is now active!');
+
+	// Configure TypeScript plugin to filter .d.ts files
+	await configureTypeScriptPlugin();
 
 	// Register Definition Provider for TypeScript, JavaScript, TSX, JSX, Vue
 	const selector = [
@@ -69,6 +126,15 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
+	// Listen for configuration changes
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration(async (e) => {
+			if (e.affectsConfiguration('quick-css-modules.enableTypeScriptPlugin')) {
+				await configureTypeScriptPlugin();
+			}
+		})
+	);
+
 	// Add setting for filtering .d.ts files
 	const config = vscode.workspace.getConfiguration('quick-css-modules');
 	const filterDTS = config.get<boolean>('filterDeclarationFiles', true);
@@ -87,7 +153,7 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 	}
 
-	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, goToCSSModuleCommand);
+	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, renameProvider, goToCSSModuleCommand);
 }
 
 function setupDefinitionFilter(context: vscode.ExtensionContext) {
@@ -377,8 +443,8 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 				// Save document
 				await cssDocument.save();
 				
-				// Return position of new class
-				const newPosition = new vscode.Position(lastLine + 1, 0);
+				// Return position inside the class with indent (on the line with tab)
+				const newPosition = new vscode.Position(lastLine + 2, 1); // Line with \t, after tab character
 				return new vscode.Location(uri, newPosition);
 			}
 		} catch (error) {

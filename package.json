@@ -23,6 +23,12 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "typescriptServerPlugins": [
+      {
+        "name": "typescript-cleanup-definitions",
+        "enableForWorkspaceTypeScriptVersions": true
+      }
+    ],
     "commands": [
       {
         "command": "quick-css-modules.goToCSSModule",
@@ -53,6 +59,11 @@
           "type": "boolean",
           "default": false,
           "description": "Override default F12 (Go to Definition) behavior for CSS modules. Warning: This replaces the default keybinding."
+        },
+        "quick-css-modules.enableTypeScriptPlugin": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable TypeScript plugin to automatically filter .d.ts files from Go to Definition (F12). When enabled, Ctrl+Click will directly open CSS modules without showing .d.ts files."
         }
       }
     }
@@ -66,13 +77,16 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.107.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "typescript-eslint": "^8.48.1",
+    "@types/vscode": "^1.107.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
     "eslint": "^9.39.1",
     "typescript": "^5.9.3",
-    "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2"
+    "typescript-eslint": "^8.48.1"
+  },
+  "dependencies": {
+    "typescript-cleanup-definitions": "^1.3.1"
   }
 }
