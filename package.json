@@ -61,6 +61,11 @@
           },
           "default": ["styles", "classes"],
           "description": "Variable names that trigger CSS module auto-import suggestions. When typing these names followed by a dot (e.g., 'styles.'), the extension will suggest CSS classes and auto-import the module."
+        },
+        "quick-css-modules.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable diagnostics for non-existent CSS classes. Shows warnings when using CSS classes that don't exist in the imported CSS module file."
         }
       }
     }

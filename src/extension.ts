@@ -1,10 +1,89 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 
 interface CSSModuleImport {
 	variableName: string;
 	filePath: string;
 	range: vscode.Range;
+}
+
+// Diagnostic code for missing CSS class
+const MISSING_CSS_CLASS_CODE = 'cssModules.missingClass';
+
+// Diagnostics collection for CSS module class validation
+let diagnosticCollection: vscode.DiagnosticCollection;
+
+// Resolve aliased path from tsconfig/jsconfig (synchronous version)
+function resolveAliasedPathSync(importPath: string, document: vscode.TextDocument): string {
+	// If it's a relative path, resolve normally
+	if (importPath.startsWith('.') || importPath.startsWith('/')) {
+		const documentDir = path.dirname(document.uri.fsPath);
+		return path.resolve(documentDir, importPath);
+	}
+
+	const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+	if (!workspaceFolder) {
+		return importPath;
+	}
+
+	const configFiles = ['tsconfig.json', 'jsconfig.json'];
+	
+	for (const configFile of configFiles) {
+		const configPath = path.join(workspaceFolder.uri.fsPath, configFile);
+		
+		try {
+			if (fs.existsSync(configPath)) {
+				const content = fs.readFileSync(configPath, 'utf8');
+				// Remove comments
+				const jsonContent = content.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+				const config = JSON.parse(jsonContent);
+				
+				const baseUrl = config.compilerOptions?.baseUrl;
+				const paths = config.compilerOptions?.paths;
+				
+				if (paths) {
+					for (const [alias, targets] of Object.entries(paths)) {
+						const aliasPattern = alias.replace(/\*/g, '(.*)');
+						const regex = new RegExp(`^${aliasPattern.replace(/\//g, '\\/')}$`);
+						const match = importPath.match(regex);
+						
+						if (match) {
+							for (const target of targets as string[]) {
+								let resolvedTarget = target;
+								if (match[1]) {
+									resolvedTarget = target.replace('*', match[1]);
+								}
+								
+								const basePath = baseUrl 
+									? path.join(workspaceFolder.uri.fsPath, baseUrl)
+									: workspaceFolder.uri.fsPath;
+								
+								const fullPath = path.join(basePath, resolvedTarget);
+								
+								if (fs.existsSync(fullPath)) {
+									return fullPath;
+								}
+							}
+						}
+					}
+				}
+				
+				// Try baseUrl only
+				if (baseUrl) {
+					const basePath = path.join(workspaceFolder.uri.fsPath, baseUrl);
+					const resolved = path.join(basePath, importPath);
+					if (fs.existsSync(resolved)) {
+						return resolved;
+					}
+				}
+			}
+		} catch (error) {
+			console.error(`Error parsing ${configFile}:`, error);
+		}
+	}
+	
+	return importPath;
 }
 
 async function configureTypeScriptPlugin() {
@@ -159,16 +238,107 @@ export async function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
+	// Register command for creating CSS class (used by Quick Fix)
+	const createCSSClassCommand = vscode.commands.registerCommand(
+		'quick-css-modules.createCSSClass',
+		async (cssFilePath: string, className: string) => {
+			try {
+				const uri = vscode.Uri.file(cssFilePath);
+				const document = await vscode.workspace.openTextDocument(uri);
+				const text = document.getText();
+				
+				// Add new class at the end of the file
+				const lastLine = document.lineCount - 1;
+				const lastLineText = document.lineAt(lastLine).text;
+				const insertPosition = new vscode.Position(lastLine, lastLineText.length);
+				
+				const newClassContent = `\n\n.${className} {\n\t\n}`;
+				
+				const edit = new vscode.WorkspaceEdit();
+				edit.insert(uri, insertPosition, newClassContent);
+				await vscode.workspace.applyEdit(edit);
+				
+				// Save the document
+				await document.save();
+				
+				// Open the file and position cursor inside the class
+				const editor = await vscode.window.showTextDocument(uri);
+				const newPosition = new vscode.Position(lastLine + 3, 1);
+				editor.selection = new vscode.Selection(newPosition, newPosition);
+				
+				vscode.window.showInformationMessage(`Created CSS class '.${className}'`);
+			} catch (error) {
+				vscode.window.showErrorMessage(`Failed to create CSS class: ${error}`);
+			}
+		}
+	);
+
+	// Setup Diagnostics Provider
+	diagnosticCollection = vscode.languages.createDiagnosticCollection('cssModules');
+	const diagnosticsProvider = new CSSModuleDiagnosticsProvider(diagnosticCollection);
+	
+	// Update diagnostics when document changes
+	const onDidChangeDocument = vscode.workspace.onDidChangeTextDocument((e) => {
+		diagnosticsProvider.updateDiagnostics(e.document);
+	});
+	
+	// Update diagnostics when document opens
+	const onDidOpenDocument = vscode.workspace.onDidOpenTextDocument((document) => {
+		diagnosticsProvider.updateDiagnostics(document);
+	});
+	
+	// Update diagnostics when document saves
+	const onDidSaveDocument = vscode.workspace.onDidSaveTextDocument((document) => {
+		diagnosticsProvider.updateDiagnostics(document);
+	});
+	
+	// Clear diagnostics when document closes
+	const onDidCloseDocument = vscode.workspace.onDidCloseTextDocument((document) => {
+		diagnosticsProvider.clearDiagnostics(document);
+	});
+	
+	// Update diagnostics for all open documents
+	vscode.workspace.textDocuments.forEach((document) => {
+		diagnosticsProvider.updateDiagnostics(document);
+	});
+
+	// Register Code Action Provider for Quick Fix
+	const codeActionProvider = vscode.languages.registerCodeActionsProvider(
+		selector,
+		new CSSModuleCodeActionProvider(),
+		{
+			providedCodeActionKinds: CSSModuleCodeActionProvider.providedCodeActionKinds
+		}
+	);
+
+	// Watch for CSS file changes to update diagnostics
+	const cssWatcher = vscode.workspace.createFileSystemWatcher('**/*.module.{css,scss,sass,less,styl,stylus}');
+	cssWatcher.onDidChange(() => {
+		vscode.workspace.textDocuments.forEach((document) => {
+			diagnosticsProvider.updateDiagnostics(document);
+		});
+	});
+
 	// Listen for configuration changes
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async (e) => {
 			if (e.affectsConfiguration('quick-css-modules.enableTypeScriptPlugin')) {
 				await configureTypeScriptPlugin();
 			}
+			if (e.affectsConfiguration('quick-css-modules.enableDiagnostics')) {
+				vscode.workspace.textDocuments.forEach((document) => {
+					diagnosticsProvider.updateDiagnostics(document);
+				});
+			}
 		})
 	);
 
-	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, autoImportProvider, renameProvider, referenceProvider, cssDefinitionProvider, documentSymbolProvider, goToCSSModuleCommand);
+	context.subscriptions.push(
+		definitionProvider, hoverProvider, completionProvider, autoImportProvider, 
+		renameProvider, referenceProvider, cssDefinitionProvider, documentSymbolProvider, 
+		goToCSSModuleCommand, createCSSClassCommand, codeActionProvider, diagnosticCollection,
+		onDidChangeDocument, onDidOpenDocument, onDidSaveDocument, onDidCloseDocument, cssWatcher
+	);
 }
 
 export function deactivate() {}
@@ -229,11 +399,10 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 		let match;
 		while ((match = importRegex.exec(text)) !== null) {
 			const variableName = match[1];
-			const relativePath = match[2];
+			const importPath = match[2];
 			
-			// Calculate absolute file path
-			const documentDir = path.dirname(document.uri.fsPath);
-			const absolutePath = path.resolve(documentDir, relativePath);
+			// Resolve path (supports aliases from tsconfig/jsconfig)
+			const absolutePath = resolveAliasedPathSync(importPath, document);
 			
 			// Find variable position in document
 			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
@@ -1520,6 +1689,222 @@ class CSSModuleAutoImportProvider implements vscode.CompletionItemProvider {
 		}
 
 		return cssContent.substring(classIndex, closeBraceIndex + 1);
+	}
+}
+
+// Diagnostics Provider for validating CSS module class usage
+class CSSModuleDiagnosticsProvider {
+	private collection: vscode.DiagnosticCollection;
+
+	constructor(collection: vscode.DiagnosticCollection) {
+		this.collection = collection;
+	}
+
+	async updateDiagnostics(document: vscode.TextDocument): Promise<void> {
+		// Check if diagnostics are enabled
+		const config = vscode.workspace.getConfiguration('quick-css-modules');
+		if (!config.get<boolean>('enableDiagnostics', true)) {
+			this.collection.delete(document.uri);
+			return;
+		}
+
+		// Only process supported file types
+		const supportedLanguages = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'vue'];
+		if (!supportedLanguages.includes(document.languageId)) {
+			return;
+		}
+
+		const diagnostics: vscode.Diagnostic[] = [];
+		const text = document.getText();
+
+		// Find CSS module imports
+		const imports = this.findCSSModuleImports(document);
+		
+		if (imports.length === 0) {
+			this.collection.delete(document.uri);
+			return;
+		}
+
+		// Cache for CSS class names per file
+		const cssClassesCache = new Map<string, Set<string>>();
+
+		// Find all usages of CSS module classes
+		for (const cssImport of imports) {
+			// Check if CSS file exists
+			if (!fs.existsSync(cssImport.filePath)) {
+				continue;
+			}
+
+			// Get CSS classes from file (cached)
+			let cssClasses = cssClassesCache.get(cssImport.filePath);
+			if (!cssClasses) {
+				cssClasses = this.extractCSSClasses(cssImport.filePath);
+				cssClassesCache.set(cssImport.filePath, cssClasses);
+			}
+
+			// Find usages: styles.className or styles['className']
+			const varName = cssImport.variableName;
+			
+			// Dot notation: styles.className
+			const dotRegex = new RegExp(`\\b${varName}\\.(\\w+)`, 'g');
+			let match;
+			
+			while ((match = dotRegex.exec(text)) !== null) {
+				const className = match[1];
+				
+				if (!cssClasses.has(className)) {
+					const classNameStart = match.index + varName.length + 1;
+					const startPos = document.positionAt(classNameStart);
+					const endPos = document.positionAt(classNameStart + className.length);
+					const range = new vscode.Range(startPos, endPos);
+					
+					const diagnostic = new vscode.Diagnostic(
+						range,
+						`CSS class '${className}' does not exist in '${path.basename(cssImport.filePath)}'`,
+						vscode.DiagnosticSeverity.Warning
+					);
+					diagnostic.code = MISSING_CSS_CLASS_CODE;
+					diagnostic.source = 'CSS Modules';
+					// Store data for quick fix
+					(diagnostic as any).cssFilePath = cssImport.filePath;
+					(diagnostic as any).className = className;
+					
+					diagnostics.push(diagnostic);
+				}
+			}
+
+			// Bracket notation: styles['className'] or styles["className"]
+			const bracketRegex = new RegExp(`\\b${varName}\\[['"]([\\w-]+)['"]\\]`, 'g');
+			
+			while ((match = bracketRegex.exec(text)) !== null) {
+				const className = match[1];
+				
+				if (!cssClasses.has(className)) {
+					const fullMatch = match[0];
+					const classNameStart = match.index + fullMatch.indexOf(className);
+					const startPos = document.positionAt(classNameStart);
+					const endPos = document.positionAt(classNameStart + className.length);
+					const range = new vscode.Range(startPos, endPos);
+					
+					const diagnostic = new vscode.Diagnostic(
+						range,
+						`CSS class '${className}' does not exist in '${path.basename(cssImport.filePath)}'`,
+						vscode.DiagnosticSeverity.Warning
+					);
+					diagnostic.code = MISSING_CSS_CLASS_CODE;
+					diagnostic.source = 'CSS Modules';
+					(diagnostic as any).cssFilePath = cssImport.filePath;
+					(diagnostic as any).className = className;
+					
+					diagnostics.push(diagnostic);
+				}
+			}
+		}
+
+		this.collection.set(document.uri, diagnostics);
+	}
+
+	clearDiagnostics(document: vscode.TextDocument): void {
+		this.collection.delete(document.uri);
+	}
+
+	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+		const imports: CSSModuleImport[] = [];
+		const text = document.getText();
+		
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
+		
+		let match;
+		while ((match = importRegex.exec(text)) !== null) {
+			const variableName = match[1];
+			const importPath = match[2];
+			
+			const absolutePath = resolveAliasedPathSync(importPath, document);
+			
+			const startPos = document.positionAt(match.index + match[0].indexOf(variableName));
+			const endPos = document.positionAt(match.index + match[0].indexOf(variableName) + variableName.length);
+			
+			imports.push({
+				variableName,
+				filePath: absolutePath,
+				range: new vscode.Range(startPos, endPos)
+			});
+		}
+		
+		return imports;
+	}
+
+	private extractCSSClasses(filePath: string): Set<string> {
+		const classes = new Set<string>();
+		
+		try {
+			const content = fs.readFileSync(filePath, 'utf8');
+			const classRegex = /\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
+			
+			let match;
+			while ((match = classRegex.exec(content)) !== null) {
+				classes.add(match[1]);
+			}
+		} catch (error) {
+			console.error('Error reading CSS file:', error);
+		}
+		
+		return classes;
+	}
+}
+
+// Code Action Provider for Quick Fix - create missing CSS class
+class CSSModuleCodeActionProvider implements vscode.CodeActionProvider {
+	static readonly providedCodeActionKinds = [
+		vscode.CodeActionKind.QuickFix
+	];
+
+	provideCodeActions(
+		document: vscode.TextDocument,
+		range: vscode.Range | vscode.Selection,
+		context: vscode.CodeActionContext,
+		token: vscode.CancellationToken
+	): vscode.CodeAction[] | undefined {
+		const actions: vscode.CodeAction[] = [];
+
+		for (const diagnostic of context.diagnostics) {
+			if (diagnostic.code === MISSING_CSS_CLASS_CODE) {
+				const cssFilePath = (diagnostic as any).cssFilePath;
+				const className = (diagnostic as any).className;
+				
+				if (cssFilePath && className) {
+					const action = this.createQuickFix(diagnostic, cssFilePath, className);
+					if (action) {
+						actions.push(action);
+					}
+				}
+			}
+		}
+
+		return actions;
+	}
+
+	private createQuickFix(
+		diagnostic: vscode.Diagnostic,
+		cssFilePath: string,
+		className: string
+	): vscode.CodeAction | undefined {
+		const action = new vscode.CodeAction(
+			`Create CSS class '.${className}'`,
+			vscode.CodeActionKind.QuickFix
+		);
+		
+		action.diagnostics = [diagnostic];
+		action.isPreferred = true;
+		
+		// Create command to add the class
+		action.command = {
+			title: 'Create CSS class',
+			command: 'quick-css-modules.createCSSClass',
+			arguments: [cssFilePath, className]
+		};
+		
+		return action;
 	}
 }
 
