@@ -33,33 +33,11 @@
       {
         "command": "quick-css-modules.goToCSSModule",
         "title": "Go to CSS Module"
-      },
-      {
-        "command": "quick-css-modules.revealDefinition",
-        "title": "Go to Definition (CSS Modules Aware)"
-      }
-    ],
-    "keybindings": [
-      {
-        "command": "quick-css-modules.revealDefinition",
-        "key": "ctrl+alt+d",
-        "mac": "cmd+alt+d",
-        "when": "editorTextFocus && (editorLangId == typescript || editorLangId == typescriptreact || editorLangId == javascript || editorLangId == javascriptreact || editorLangId == vue)"
       }
     ],
     "configuration": {
       "title": "Quick CSS Modules",
       "properties": {
-        "quick-css-modules.filterDeclarationFiles": {
-          "type": "boolean",
-          "default": true,
-          "description": "Filter out .d.ts files from CSS module navigation"
-        },
-        "quick-css-modules.overrideGoToDefinition": {
-          "type": "boolean",
-          "default": false,
-          "description": "Override default F12 (Go to Definition) behavior for CSS modules. Warning: This replaces the default keybinding."
-        },
         "quick-css-modules.enableTypeScriptPlugin": {
           "type": "boolean",
           "default": true,

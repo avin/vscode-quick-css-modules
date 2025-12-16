@@ -61,7 +61,7 @@ Rename CSS classes across your entire project - the extension updates both the C
 ```
 
 ### Automatic .d.ts Filtering
-By default, the extension uses a TypeScript plugin to automatically filter `.d.ts` declaration files from "Go to Definition" results. This means **F12** and **Ctrl+Click** will directly open CSS module files without showing intermediate type declaration files.
+The extension uses a TypeScript plugin to automatically filter `.d.ts` declaration files from "Go to Definition" results. This means **F12** and **Ctrl+Click** will directly open CSS module files without showing intermediate type declaration files.
 
 **How it works:**
 - Uses [typescript-cleanup-definitions](https://www.npmjs.com/package/typescript-cleanup-definitions) plugin
@@ -69,18 +69,14 @@ By default, the extension uses a TypeScript plugin to automatically filter `.d.t
 - Works automatically with standard F12 / Ctrl+Click navigation
 - Can be disabled via `quick-css-modules.enableTypeScriptPlugin` setting
 
-**Alternative:** If you prefer manual control, disable the plugin and use **Ctrl+Alt+D** for filtered navigation.
-
 ## How to Use
 
-### Navigation Shortcuts
-- **F12** or **Ctrl+Click** - Direct navigation to CSS files (automatic .d.ts filtering enabled by default)
-- **Ctrl+Alt+D** - Alternative navigation command with .d.ts filtering
+### Navigation
+- **F12** or **Ctrl+Click** - Navigate directly to CSS files and class definitions (automatic .d.ts filtering)
 
 ### Available Commands
-Access these commands via Command Palette (Ctrl+Shift+P):
-- `Quick CSS Modules: Go to CSS Module` - Navigate to CSS module file
-- `Quick CSS Modules: Go to Definition (CSS Modules Aware)` - Navigate with automatic `.d.ts` filtering
+Access via Command Palette (Ctrl+Shift+P):
+- `Quick CSS Modules: Go to CSS Module` - Navigate to CSS module file from current position
 
 ## Configuration
 
@@ -88,23 +84,7 @@ Access these commands via Command Palette (Ctrl+Shift+P):
 
 This extension contributes the following settings:
 
-- `quick-css-modules.enableTypeScriptPlugin` - Enable TypeScript plugin to automatically filter .d.ts files (default: `true`). When enabled, F12/Ctrl+Click directly opens CSS modules
-- `quick-css-modules.filterDeclarationFiles` - Enable/disable filtering of `.d.ts` files during navigation (default: `true`)
-- `quick-css-modules.overrideGoToDefinition` - Show hint about F12 override (default: `false`)
-
-**Recommended:** Keep `enableTypeScriptPlugin` enabled for the best experience - F12 will work like Ctrl+Alt+D automatically!
-
-### Custom Keybindings (Optional)
-
-If you disabled the TypeScript plugin and prefer manual keybinding override, add this to your `keybindings.json`:
-
-```json
-{
-  "key": "f12",
-  "command": "quick-css-modules.revealDefinition",
-  "when": "editorTextFocus && (editorLangId == typescript || editorLangId == typescriptreact)"
-}
-```
+- `quick-css-modules.enableTypeScriptPlugin` - Enable TypeScript plugin to automatically filter .d.ts files (default: `true`). When enabled, F12/Ctrl+Click directly opens CSS modules without showing declaration files
 
 ## Supported File Types
 
@@ -137,12 +117,11 @@ VS Code version 1.107.0 or higher
 ### 0.0.1 - Initial Release
 
 Features included:
-- **TypeScript plugin integration** - Automatically filters .d.ts files from F12/Ctrl+Click navigation ⭐ NEW
+- **TypeScript plugin integration** - Automatically filters .d.ts files from F12/Ctrl+Click navigation
 - Smart navigation to CSS modules with Ctrl+Click
 - Automatic class creation for non-existent classes
 - IntelliSense autocompletion for CSS class names
 - CSS preview on hover (Ctrl+Hover)
-- Declaration file filtering with Ctrl+Alt+D fallback
 - **Rename refactoring** - rename classes across CSS and all usages (F2)
 - **Extended file format support** - .less, .styl/.stylus modules
 - **Framework support** - Vue SFC with `<style module>`
