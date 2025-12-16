@@ -96,6 +96,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		'.' // Trigger character - dot
 	);
 
+	// Register Auto-import Completion Provider
+	const autoImportProvider = vscode.languages.registerCompletionItemProvider(
+		selector,
+		new CSSModuleAutoImportProvider(),
+		'.' // Trigger character - dot
+	);
+
 	// Register Rename Provider for refactoring CSS class names
 	const renameProvider = vscode.languages.registerRenameProvider(
 		selector,
@@ -114,6 +121,18 @@ export async function activate(context: vscode.ExtensionContext) {
 	const referenceProvider = vscode.languages.registerReferenceProvider(
 		cssSelector,
 		new CSSModuleReferenceProvider()
+	);
+
+	// Register Definition Provider for CSS files (composes support)
+	const cssDefinitionProvider = vscode.languages.registerDefinitionProvider(
+		cssSelector,
+		new CSSComposesDefinitionProvider()
+	);
+
+	// Register Document Symbol Provider for CSS module files (Outline)
+	const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider(
+		cssSelector,
+		new CSSModuleSymbolProvider()
 	);
 
 	// Register command for explicit navigation to CSS module
@@ -149,7 +168,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		})
 	);
 
-	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, renameProvider, referenceProvider, goToCSSModuleCommand);
+	context.subscriptions.push(definitionProvider, hoverProvider, completionProvider, autoImportProvider, renameProvider, referenceProvider, cssDefinitionProvider, documentSymbolProvider, goToCSSModuleCommand);
 }
 
 export function deactivate() {}
@@ -974,10 +993,10 @@ class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
 					return fileRefs;
 				}
 
-				const imports = this.findCSSModuleImports(document);
+				const imports = this.findCSSModuleImportsForRef(document);
 
 				// Check if this file imports the CSS module we're searching from
-				const relevantImport = imports.find(imp => {
+				const relevantImport = imports.find((imp: CSSModuleImport) => {
 					const normalizedImp = path.normalize(imp.filePath).toLowerCase();
 					const normalizedCss = path.normalize(cssFilePath).toLowerCase();
 					return normalizedImp === normalizedCss;
@@ -1059,7 +1078,7 @@ class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
 		return undefined;
 	}
 
-	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+	private findCSSModuleImportsForRef(document: vscode.TextDocument): CSSModuleImport[] {
 		const imports: CSSModuleImport[] = [];
 		const text = document.getText();
 		
@@ -1086,3 +1105,421 @@ class CSSModuleReferenceProvider implements vscode.ReferenceProvider {
 		return imports;
 	}
 }
+
+// Definition Provider for CSS composes directive
+class CSSComposesDefinitionProvider implements vscode.DefinitionProvider {
+	async provideDefinition(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken
+	): Promise<vscode.Definition | undefined> {
+		const line = document.lineAt(position.line).text;
+		
+		// Check if this line contains composes
+		// Format: composes: className from './file.module.css';
+		// or: composes: className1 className2 from './file.module.css';
+		// or: composes: className from global;
+		const composesMatch = line.match(/composes:\s*([^;]+)/);
+		if (!composesMatch) {
+			return undefined;
+		}
+
+		const composesContent = composesMatch[1];
+		const composesStart = line.indexOf('composes:') + 'composes:'.length;
+		
+		// Check if clicking on "from './path'" part
+		const fromMatch = composesContent.match(/from\s+['"]([^'"]+)['"]/);
+		if (fromMatch) {
+			const fromPath = fromMatch[1];
+			const fromIndex = line.indexOf(fromPath);
+			const fromEndIndex = fromIndex + fromPath.length;
+			
+			// Check if cursor is on the path
+			if (position.character >= fromIndex && position.character <= fromEndIndex) {
+				// Navigate to the file
+				const documentDir = path.dirname(document.uri.fsPath);
+				const absolutePath = path.resolve(documentDir, fromPath);
+				
+				try {
+					const uri = vscode.Uri.file(absolutePath);
+					return new vscode.Location(uri, new vscode.Position(0, 0));
+				} catch {
+					return undefined;
+				}
+			}
+		}
+		
+		// Check if clicking on a class name
+		// Extract class names (before "from" if present)
+		const classNamesPart = composesContent.includes(' from ')
+			? composesContent.substring(0, composesContent.indexOf(' from ')).trim()
+			: composesContent.trim().replace(/;$/, '');
+		
+		const classNames = classNamesPart.split(/\s+/).filter(c => c.length > 0);
+		
+		// Find which class name cursor is on
+		let currentPos = composesStart;
+		for (const className of classNames) {
+			const classIndex = line.indexOf(className, currentPos);
+			if (classIndex === -1) {
+				continue;
+			}
+			
+			const classEndIndex = classIndex + className.length;
+			currentPos = classEndIndex;
+			
+			if (position.character >= classIndex && position.character <= classEndIndex) {
+				// Cursor is on this class name
+				// Determine where to navigate
+				if (fromMatch) {
+					// Navigate to external file
+					const fromPath = fromMatch[1];
+					const documentDir = path.dirname(document.uri.fsPath);
+					const absolutePath = path.resolve(documentDir, fromPath);
+					
+					return this.findClassInFile(absolutePath, className);
+				} else {
+					// Local class - find in same file
+					return this.findClassInFile(document.uri.fsPath, className);
+				}
+			}
+		}
+		
+		return undefined;
+	}
+
+	private async findClassInFile(filePath: string, className: string): Promise<vscode.Location | undefined> {
+		try {
+			const uri = vscode.Uri.file(filePath);
+			const document = await vscode.workspace.openTextDocument(uri);
+			const text = document.getText();
+			
+			// Find class definition
+			const classPattern = `.${className}`;
+			const classIndex = text.indexOf(classPattern);
+			
+			if (classIndex !== -1) {
+				const position = document.positionAt(classIndex);
+				return new vscode.Location(uri, position);
+			}
+		} catch (error) {
+			console.error('Error finding class in file:', error);
+		}
+		
+		return undefined;
+	}
+}
+
+// Document Symbol Provider for CSS module files (shows classes in Outline)
+class CSSModuleSymbolProvider implements vscode.DocumentSymbolProvider {
+	provideDocumentSymbols(
+		document: vscode.TextDocument,
+		token: vscode.CancellationToken
+	): vscode.DocumentSymbol[] | undefined {
+		// Only process CSS module files
+		if (!this.isCSSModuleFile(document.uri.fsPath)) {
+			return undefined;
+		}
+
+		const symbols: vscode.DocumentSymbol[] = [];
+		const text = document.getText();
+		
+		// Find all class selectors
+		const classRegex = /\.([a-zA-Z_][a-zA-Z0-9_-]*)\s*\{/g;
+		let match;
+		
+		while ((match = classRegex.exec(text)) !== null) {
+			const className = match[1];
+			const startPos = document.positionAt(match.index);
+			
+			// Find the end of the class (closing brace)
+			const openBraceIndex = match.index + match[0].length - 1;
+			let depth = 1;
+			let closeBraceIndex = openBraceIndex + 1;
+			
+			for (let i = openBraceIndex + 1; i < text.length && depth > 0; i++) {
+				if (text[i] === '{') {
+					depth++;
+				} else if (text[i] === '}') {
+					depth--;
+					if (depth === 0) {
+						closeBraceIndex = i;
+					}
+				}
+			}
+			
+			const endPos = document.positionAt(closeBraceIndex + 1);
+			const range = new vscode.Range(startPos, endPos);
+			const selectionRange = new vscode.Range(
+				startPos,
+				document.positionAt(match.index + match[0].length - 1)
+			);
+			
+			// Extract CSS properties for detail
+			const classContent = text.substring(openBraceIndex + 1, closeBraceIndex);
+			const properties = this.extractProperties(classContent);
+			const detail = properties.length > 0 ? properties.slice(0, 3).join(', ') + (properties.length > 3 ? '...' : '') : '';
+			
+			const symbol = new vscode.DocumentSymbol(
+				`.${className}`,
+				detail,
+				vscode.SymbolKind.Class,
+				range,
+				selectionRange
+			);
+			
+			symbols.push(symbol);
+		}
+		
+		return symbols;
+	}
+
+	private isCSSModuleFile(filePath: string): boolean {
+		return /\.module\.(scss|css|sass|less|styl|stylus)$/i.test(filePath);
+	}
+
+	private extractProperties(classContent: string): string[] {
+		const properties: string[] = [];
+		// Match CSS properties like "color: red" or "margin: 10px"
+		const propRegex = /([a-z-]+)\s*:/gi;
+		let match;
+		
+		while ((match = propRegex.exec(classContent)) !== null) {
+			properties.push(match[1]);
+		}
+		
+		return properties;
+	}
+}
+
+// Auto-import Completion Provider for CSS modules
+class CSSModuleAutoImportProvider implements vscode.CompletionItemProvider {
+	async provideCompletionItems(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken,
+		context: vscode.CompletionContext
+	): Promise<vscode.CompletionItem[] | undefined> {
+		// Check if auto-import is enabled
+		const config = vscode.workspace.getConfiguration('quick-css-modules');
+		if (!config.get<boolean>('enableAutoImport', true)) {
+			return undefined;
+		}
+
+		const line = document.lineAt(position.line).text;
+		const textBeforeCursor = line.substring(0, position.character);
+		
+		// Check if user is typing a variable name followed by dot that might be CSS module
+		// e.g., "styles." but styles is not imported yet
+		const match = textBeforeCursor.match(/(\w+)\.$/);
+		if (!match) {
+			return undefined;
+		}
+
+		const variableName = match[1];
+		
+		// Check if this variable is already imported
+		const existingImports = this.findCSSModuleImports(document);
+		if (existingImports.some(imp => imp.variableName === variableName)) {
+			// Already imported, let the regular completion provider handle it
+			return undefined;
+		}
+
+		// Get configured variable names for auto-import
+		const autoImportNames = config.get<string[]>('autoImportVariableNames', ['styles', 'classes']);
+		if (!autoImportNames.some((name: string) => name.toLowerCase() === variableName.toLowerCase())) {
+			return undefined;
+		}
+
+		// Find potential CSS module files in the same directory or nearby
+		const documentDir = path.dirname(document.uri.fsPath);
+		const documentName = path.basename(document.uri.fsPath);
+		const baseName = documentName.replace(/\.(tsx?|jsx?|vue)$/, '');
+		
+		const cssModuleFiles = await this.findCSSModuleFilesNearby(documentDir, baseName);
+		
+		if (cssModuleFiles.length === 0) {
+			return undefined;
+		}
+
+		// Create completion items with auto-import
+		const items: vscode.CompletionItem[] = [];
+		
+		for (const cssFile of cssModuleFiles) {
+			const relativePath = this.getRelativePath(document.uri.fsPath, cssFile.fsPath);
+			
+			// Read the CSS file to get class names
+			try {
+				const cssDocument = await vscode.workspace.openTextDocument(cssFile);
+				const cssContent = cssDocument.getText();
+				const classNames = this.extractClassNames(cssContent);
+				
+				for (const className of classNames) {
+					const item = new vscode.CompletionItem(
+						className,
+						vscode.CompletionItemKind.Property
+					);
+					
+					item.detail = `Auto-import from ${path.basename(cssFile.fsPath)}`;
+					item.sortText = '0' + className; // Prioritize these completions
+					
+					// Add documentation with class preview
+					const classContent = this.getClassPreview(cssContent, className);
+					if (classContent) {
+						item.documentation = new vscode.MarkdownString();
+						item.documentation.appendCodeblock(classContent, 'scss');
+						item.documentation.appendText(`\n\n📦 Will add import: \`import ${variableName} from '${relativePath}'\``);
+					}
+					
+					// Create additional text edit to add import statement
+					const importStatement = `import ${variableName} from '${relativePath}';\n`;
+					const importPosition = this.findImportInsertPosition(document);
+					
+					item.additionalTextEdits = [
+						vscode.TextEdit.insert(importPosition, importStatement)
+					];
+					
+					items.push(item);
+				}
+			} catch (error) {
+				console.error('Error reading CSS file for auto-import:', error);
+			}
+		}
+		
+		return items;
+	}
+
+	private findCSSModuleImports(document: vscode.TextDocument): CSSModuleImport[] {
+		const imports: CSSModuleImport[] = [];
+		const text = document.getText();
+		
+		const importRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+\.module\.(scss|css|sass|less|styl|stylus))['"]/g;
+		
+		let match;
+		while ((match = importRegex.exec(text)) !== null) {
+			imports.push({
+				variableName: match[1],
+				filePath: match[2],
+				range: new vscode.Range(0, 0, 0, 0)
+			});
+		}
+		
+		return imports;
+	}
+
+	private async findCSSModuleFilesNearby(directory: string, baseName: string): Promise<vscode.Uri[]> {
+		const results: vscode.Uri[] = [];
+		
+		// Look for CSS modules with the same base name
+		const extensions = ['scss', 'css', 'sass', 'less', 'styl', 'stylus'];
+		
+		for (const ext of extensions) {
+			// Try ComponentName.module.scss
+			const exactMatch = path.join(directory, `${baseName}.module.${ext}`);
+			try {
+				const uri = vscode.Uri.file(exactMatch);
+				await vscode.workspace.fs.stat(uri);
+				results.push(uri);
+			} catch {
+				// File doesn't exist
+			}
+		}
+		
+		// If no exact match, search for any CSS module in the directory
+		if (results.length === 0) {
+			try {
+				const pattern = new vscode.RelativePattern(directory, '*.module.{scss,css,sass,less,styl,stylus}');
+				const files = await vscode.workspace.findFiles(pattern, null, 5);
+				results.push(...files);
+			} catch (error) {
+				console.error('Error finding CSS module files:', error);
+			}
+		}
+		
+		return results;
+	}
+
+	private getRelativePath(fromPath: string, toPath: string): string {
+		const fromDir = path.dirname(fromPath);
+		let relativePath = path.relative(fromDir, toPath);
+		
+		// Ensure forward slashes
+		relativePath = relativePath.replace(/\\/g, '/');
+		
+		// Add ./ prefix if needed
+		if (!relativePath.startsWith('.') && !relativePath.startsWith('/')) {
+			relativePath = './' + relativePath;
+		}
+		
+		return relativePath;
+	}
+
+	private findImportInsertPosition(document: vscode.TextDocument): vscode.Position {
+		const text = document.getText();
+		
+		// Find the last import statement
+		const importRegex = /^import\s+.*$/gm;
+		let lastImportEnd = 0;
+		let match;
+		
+		while ((match = importRegex.exec(text)) !== null) {
+			lastImportEnd = match.index + match[0].length;
+		}
+		
+		if (lastImportEnd > 0) {
+			// Insert after the last import
+			const position = document.positionAt(lastImportEnd);
+			return new vscode.Position(position.line + 1, 0);
+		}
+		
+		// No imports found, insert at the beginning
+		return new vscode.Position(0, 0);
+	}
+
+	private extractClassNames(cssContent: string): string[] {
+		const classNames = new Set<string>();
+		const classRegex = /\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
+		
+		let match;
+		while ((match = classRegex.exec(cssContent)) !== null) {
+			const className = match[1];
+			if (!className.startsWith(':') && !className.startsWith('::')) {
+				classNames.add(className);
+			}
+		}
+		
+		return Array.from(classNames).sort();
+	}
+
+	private getClassPreview(cssContent: string, className: string): string | undefined {
+		const classPattern = `.${className}`;
+		const classIndex = cssContent.indexOf(classPattern);
+		
+		if (classIndex === -1) {
+			return undefined;
+		}
+
+		const openBraceIndex = cssContent.indexOf('{', classIndex);
+		if (openBraceIndex === -1) {
+			return undefined;
+		}
+
+		let depth = 0;
+		let closeBraceIndex = openBraceIndex;
+		
+		for (let i = openBraceIndex; i < cssContent.length; i++) {
+			if (cssContent[i] === '{') {
+				depth++;
+			} else if (cssContent[i] === '}') {
+				depth--;
+				if (depth === 0) {
+					closeBraceIndex = i;
+					break;
+				}
+			}
+		}
+
+		return cssContent.substring(classIndex, closeBraceIndex + 1);
+	}
+}
+

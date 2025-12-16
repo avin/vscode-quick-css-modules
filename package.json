@@ -48,6 +48,19 @@
           "type": "boolean",
           "default": true,
           "description": "Enable TypeScript plugin to automatically filter .d.ts files from Go to Definition (F12). When enabled, Ctrl+Click will directly open CSS modules without showing .d.ts files."
+        },
+        "quick-css-modules.enableAutoImport": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable auto-import suggestions for CSS modules. When typing configured variable names (e.g., 'styles.'), the extension will suggest CSS classes and automatically add the import statement."
+        },
+        "quick-css-modules.autoImportVariableNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["styles", "classes"],
+          "description": "Variable names that trigger CSS module auto-import suggestions. When typing these names followed by a dot (e.g., 'styles.'), the extension will suggest CSS classes and auto-import the module."
         }
       }
     }

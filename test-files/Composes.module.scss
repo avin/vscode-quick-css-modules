@@ -1,0 +1,4 @@
+.primaryButton {
+	composes: baseButton from './BaseStyles.module.scss';
+	background: blue;
+}
