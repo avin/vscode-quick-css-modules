@@ -86,6 +86,24 @@ function resolveAliasedPathSync(importPath: string, document: vscode.TextDocumen
 	return importPath;
 }
 
+function getTypeScriptExtension(): vscode.Extension<any> | undefined {
+	const preferredIds = [
+		'vscode.typescript-language-features',
+		'ms-vscode.vscode-typescript-next'
+	];
+
+	for (const id of preferredIds) {
+		const extension = vscode.extensions.getExtension(id);
+		if (extension) {
+			return extension;
+		}
+	}
+
+	return vscode.extensions.all.find((extension) =>
+		extension.id.toLowerCase().endsWith('typescript-language-features')
+	);
+}
+
 async function configureTypeScriptPlugin() {
 	const config = vscode.workspace.getConfiguration('quick-css-modules');
 	const enablePlugin = config.get<boolean>('enableTypeScriptPlugin', true);
@@ -96,7 +114,7 @@ async function configureTypeScriptPlugin() {
 
 	try {
 		// Get TypeScript extension
-		const tsExtension = vscode.extensions.getExtension('vscode.typescript-language-features');
+		const tsExtension = getTypeScriptExtension();
 		if (!tsExtension) {
 			console.warn('TypeScript extension not found');
 			return;
@@ -344,11 +362,17 @@ export async function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
+	private isResolvingExternalDefinitions = false;
+
 	async provideDefinition(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		token: vscode.CancellationToken
 	): Promise<vscode.Definition | undefined> {
+		if (this.isResolvingExternalDefinitions) {
+			return undefined;
+		}
+
 		const wordRange = document.getWordRangeAtPosition(position);
 		if (!wordRange) {
 			return undefined;
@@ -372,8 +396,18 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 			// Find corresponding import
 			const cssImport = cssModuleImports.find(imp => imp.variableName === objectName);
 			if (cssImport) {
-				// Find or create class in CSS module
-				return this.findOrCreateCSSClass(document, cssImport.filePath, propertyName);
+				const externalDefinitions = await this.getExternalDefinitions(document, position);
+				const cssLocation = await this.findOrCreateCSSClass(document, cssImport.filePath, propertyName);
+
+				if (!cssLocation) {
+					return undefined;
+				}
+
+				if (this.isDuplicateDefinition(externalDefinitions, cssLocation)) {
+					return undefined;
+				}
+
+				return cssLocation;
 			}
 		}
 
@@ -416,6 +450,76 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 		}
 		
 		return imports;
+	}
+
+	private async getExternalDefinitions(
+		document: vscode.TextDocument,
+		position: vscode.Position
+	): Promise<(vscode.Location | vscode.LocationLink)[] | undefined> {
+		if (this.isResolvingExternalDefinitions) {
+			return undefined;
+		}
+
+		this.isResolvingExternalDefinitions = true;
+
+		try {
+			const definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+				'vscode.executeDefinitionProvider',
+				document.uri,
+				position
+			);
+
+			return definitions ?? undefined;
+		} catch (error) {
+			console.warn('Quick CSS Modules: failed to read external definitions', error);
+			return undefined;
+		} finally {
+			this.isResolvingExternalDefinitions = false;
+		}
+	}
+
+	private isDuplicateDefinition(
+		definitions: (vscode.Location | vscode.LocationLink)[] | undefined,
+		candidate: vscode.Location
+	): boolean {
+		if (!definitions || definitions.length === 0) {
+			return false;
+		}
+
+		const candidatePath = path.normalize(candidate.uri.fsPath).toLowerCase();
+		const candidateRange = candidate.range;
+
+		return definitions.some((definition) => {
+			const target = this.normalizeDefinitionTarget(definition);
+			if (!target.uri || !target.range) {
+				return false;
+			}
+
+			const normalizedPath = path.normalize(target.uri.fsPath).toLowerCase();
+			const sameFile = normalizedPath === candidatePath;
+
+			if (!sameFile) {
+				return false;
+			}
+
+			return target.range.intersection(candidateRange) !== undefined;
+		});
+	}
+
+	private normalizeDefinitionTarget(
+		definition: vscode.Location | vscode.LocationLink
+	): { uri?: vscode.Uri; range?: vscode.Range } {
+		if ('targetUri' in definition) {
+			return {
+				uri: definition.targetUri,
+				range: definition.targetRange ?? definition.targetSelectionRange
+			};
+		}
+
+		return {
+			uri: definition.uri,
+			range: definition.range
+		};
 	}
 
 	private getPropertyAccess(
@@ -541,11 +645,17 @@ class CSSModuleDefinitionProvider implements vscode.DefinitionProvider {
 }
 
 class CSSModuleHoverProvider implements vscode.HoverProvider {
+	private isResolvingExternalHover = false;
+
 	async provideHover(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		token: vscode.CancellationToken
 	): Promise<vscode.Hover | undefined> {
+		if (this.isResolvingExternalHover) {
+			return undefined;
+		}
+
 		const wordRange = document.getWordRangeAtPosition(position);
 		if (!wordRange) {
 			return undefined;
@@ -591,6 +701,11 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 
 			// Extract class content
 			const classContent = this.extractClassContent(cssContent, classIndex);
+
+			const externalHovers = await this.getExternalHovers(document, position);
+			if (this.hasSimilarHover(externalHovers, propertyName, cssImport.filePath)) {
+				return undefined;
+			}
 			
 			const markdown = new vscode.MarkdownString();
 			markdown.appendCodeblock(classContent, 'scss');
@@ -601,6 +716,78 @@ class CSSModuleHoverProvider implements vscode.HoverProvider {
 			console.error('Error reading CSS file:', error);
 			return undefined;
 		}
+	}
+
+	private async getExternalHovers(
+		document: vscode.TextDocument,
+		position: vscode.Position
+	): Promise<vscode.Hover[] | undefined> {
+		if (this.isResolvingExternalHover) {
+			return undefined;
+		}
+
+		this.isResolvingExternalHover = true;
+
+		try {
+			const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+				'vscode.executeHoverProvider',
+				document.uri,
+				position
+			);
+
+			return hovers ?? undefined;
+		} catch (error) {
+			console.warn('Quick CSS Modules: failed to read external hovers', error);
+			return undefined;
+		} finally {
+			this.isResolvingExternalHover = false;
+		}
+	}
+
+	private hasSimilarHover(
+		hovers: vscode.Hover[] | undefined,
+		className: string,
+		cssFilePath: string
+	): boolean {
+		if (!hovers || hovers.length === 0) {
+			return false;
+		}
+
+		const lookupClass = `.${className.toLowerCase()}`;
+		const cssFileName = path.basename(cssFilePath).toLowerCase();
+
+		return hovers.some((hover) => {
+			const contents = Array.isArray(hover.contents) ? hover.contents : [hover.contents];
+
+			return contents.some((content) => {
+				const text = this.hoverContentToText(content).toLowerCase();
+
+				if (!text) {
+					return false;
+				}
+
+				const hasClassMention = text.includes(lookupClass);
+				const looksLikeCssSnippet = text.includes('{') || text.includes(cssFileName);
+
+				return hasClassMention && looksLikeCssSnippet;
+			});
+		});
+	}
+
+	private hoverContentToText(content: vscode.MarkdownString | vscode.MarkedString): string {
+		if (typeof content === 'string') {
+			return content;
+		}
+
+		if (content instanceof vscode.MarkdownString) {
+			return content.value;
+		}
+
+		if (typeof content === 'object' && 'value' in content) {
+			return (content as { value?: string }).value ?? '';
+		}
+
+		return '';
 	}
 
 	private extractClassContent(cssContent: string, classIndex: number): string {
@@ -1907,4 +2094,3 @@ class CSSModuleCodeActionProvider implements vscode.CodeActionProvider {
 		return action;
 	}
 }
-
